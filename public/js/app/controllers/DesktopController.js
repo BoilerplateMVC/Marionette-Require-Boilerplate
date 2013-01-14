@@ -1,11 +1,11 @@
-define(['backbone','marionette', 'views/WelcomeView', 'views/NavView'], function(Backbone, Marionette, WelcomeView, NavView) {
-   return Backbone.Marionette.Controller.extend({
-       initialize: function(options) {
-           App.navRegion.show( new NavView());
-       },
-       //gets mapped to in AppRouter
-       index: function() {
-           App.mainRegion.show(new WelcomeView());
-       }
-   }) ;
+define(['backbone', 'marionette', 'views/WelcomeView', 'views/DesktopHeaderView'], function (Backbone, Marionette, WelcomeView, DesktopHeaderView) {
+    return Backbone.Marionette.Controller.extend({
+        initialize:function (options) {
+            App.headerRegion.show(new DesktopHeaderView());
+        },
+        //gets mapped to in AppRouter
+        index:function () {
+            App.mainRegion.show(new WelcomeView());
+        }
+    });
 });

@@ -2,7 +2,7 @@ define(["jquery", "models/Model", "views/NavView", "views/WelcomeView", "collect
     function($, Model, NavView, WelcomeView, Collection) {
         var DesktopRouter = Backbone.Router.extend({
             initialize: function() {
-                App.navRegion.show(new NavView());
+                App.headerRegion.show(new NavView());
 
                 // Tells Backbone to start watching for hashchange events
                 Backbone.history.start();

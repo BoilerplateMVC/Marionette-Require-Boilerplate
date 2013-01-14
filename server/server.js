@@ -7,20 +7,19 @@ var express = require("express"),
 
 // SERVER CONFIGURATION
 // ====================
-server.configure(function() {
+server.configure(function () {
 
-  server.use(express["static"](__dirname + "/../public"));
+    server.use(express["static"](__dirname + "/../public"));
 
-  server.use(express.errorHandler({
+    server.use(express.errorHandler({
 
-    dumpExceptions: true,
+        dumpExceptions:true,
 
-    showStack: true
+        showStack:true
 
-  }));
+    }));
 
-  server.use(server.router);
-
+    server.use(server.router);
 });
 
 // SERVER

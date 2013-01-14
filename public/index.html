@@ -1,93 +1,98 @@
 <!doctype html>
 <!-- paulirish.com/2008/conditional-stylesheets-vs-css-hacks-answer-neither/ -->
-<!--[if lt IE 7]> <html class="no-js lt-ie9 lt-ie8 lt-ie7 ui-mobile-rendering" lang="en"> <![endif]-->
-<!--[if IE 7]>    <html class="no-js lt-ie9 lt-ie8 ui-mobile-rendering" lang="en"> <![endif]-->
-<!--[if IE 8]>    <html class="no-js lt-ie9 ui-mobile-rendering" lang="en"> <![endif]-->
-<!--[if gt IE 8]><!--> <html class="no-js ui-mobile-rendering" lang="en"> <!--<![endif]-->
+<!--[if lt IE 7]>
+<html class="no-js lt-ie9 lt-ie8 lt-ie7 ui-mobile-rendering" lang="en"> <![endif]-->
+<!--[if IE 7]>
+<html class="no-js lt-ie9 lt-ie8 ui-mobile-rendering" lang="en"> <![endif]-->
+<!--[if IE 8]>
+<html class="no-js lt-ie9 ui-mobile-rendering" lang="en"> <![endif]-->
+<!--[if gt IE 8]><!-->
+<html class="no-js ui-mobile-rendering" lang="en"> <!--<![endif]-->
 <head>
-  <meta charset="utf-8">
+    <meta charset="utf-8">
 
-  <!-- Use the .htaccess and remove these lines to avoid edge case issues.
-       More info: h5bp.com/i/378 -->
-  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <!-- Use the .htaccess and remove these lines to avoid edge case issues.
+         More info: h5bp.com/i/378 -->
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
 
-  <title>Marionette-Require Boilerplate</title>
-  <meta name="description" content="Marionette and Require.js Boilerplate Library">
+    <title>Marionette-Require Boilerplate</title>
+    <meta name="description" content="Marionette and Require.js Boilerplate Library">
 
-  <!-- Mobile viewport optimized: h5bp.com/viewport -->
-  <meta name="viewport" content="user-scalable=no, initial-scale=1.0, maximum-scale=1.0, width=device-width">
+    <!-- Mobile viewport optimized: h5bp.com/viewport -->
+    <meta name="viewport" content="user-scalable=no, initial-scale=1.0, maximum-scale=1.0, width=device-width">
 
-  <!-- Include your site specific stylesheets -->
-  <link rel="stylesheet" href="css/commonstyles.css">
+    <!-- Include your site specific stylesheets -->
+    <link rel="stylesheet" href="css/commonstyles.css">
 
-  <!--Detect if the browser is a mobile browser or a desktop browser and conditionally include your JavaScript -->
-  <script>
+    <!--Detect if the browser is a mobile browser or a desktop browser and conditionally include your JavaScript -->
+    <script>
 
-      // Mobile/Desktop Detection script
-      (function(ua, w, d) {
+        // Mobile/Desktop Detection script
+        (function (ua, w, d) {
 
-        // Listen to the DOMContentLoaded Event (Supported in IE9+, Chrome Firefox, Safari)
-        w.addEventListener("DOMContentLoaded", function() {
-          // Mobile JavaScript
-          if((/iPhone|iPod|iPad|Android|BlackBerry|Opera Mini|IEMobile/).test(ua)) {
-            loadFiles({
-              "css": "css/libs/jquery.mobile.css",
-              // Change this to "js/app/config/MobileInit.min" for production
-              "data-main": "js/app/config/MobileInit",
-              "requirejs": "js/libs/require.js"
-            });
-          }
-          // Desktop JavaScript
-          else {
-            loadFiles({
-              "css": "css/libs/bootstrap.css",
-              // Change this to "js/app/config/DesktopInit.min" for production
-              "data-main": "js/app/config/DesktopInit",
-              "requirejs": "js/libs/require.js"
-            });
-          }
+            // Listen to the DOMContentLoaded Event (Supported in IE9+, Chrome Firefox, Safari)
+            w.addEventListener("DOMContentLoaded", function () {
+                // Mobile JavaScript
+                if (true) {
+                //if ((/iPhone|iPod|iPad|Android|BlackBerry|Opera Mini|IEMobile/).test(ua)) {
+                    loadFiles({
+                        "css":"css/libs/jquery.mobile.css",
+                        // Change this to "js/app/config/MobileInit.min" for production
+                        "data-main":"js/app/config/MobileInit",
+                        "requirejs":"js/libs/require.js"
+                    });
+                }
+                // Desktop JavaScript
+                else {
+                    loadFiles({
+                        "css":"css/libs/bootstrap.css",
+                        // Change this to "js/app/config/DesktopInit.min" for production
+                        "data-main":"js/app/config/DesktopInit",
+                        "requirejs":"js/libs/require.js"
+                    });
+                }
 
-          function loadCss(url, callback) {
-            var link = d.createElement("link");
-            link.type = "text/css";
-            link.rel = "stylesheet";
-            link.href = url;
+                function loadCss(url, callback) {
+                    var link = d.createElement("link");
+                    link.type = "text/css";
+                    link.rel = "stylesheet";
+                    link.href = url;
 
-            d.querySelector("head").appendChild(link);
+                    d.querySelector("head").appendChild(link);
 
-            if(callback) callback();
-          }
+                    if (callback) callback();
+                }
 
-          function loadRequireJS(obj, callback) {
-            var script = d.createElement('script');
-            script.setAttribute("data-main", obj["data-main"]);
-            script.src = obj.src;
-            d.body.appendChild(script);
-            if(callback) callback();
-          }
+                function loadRequireJS(obj, callback) {
+                    var script = d.createElement('script');
+                    script.setAttribute("data-main", obj["data-main"]);
+                    script.src = obj.src;
+                    d.body.appendChild(script);
+                    if (callback) callback();
+                }
 
-          function loadFiles(obj) {
-            // Loads the jQuery Mobile CSS file
-            loadCss(obj.css);
+                function loadFiles(obj) {
+                    // Loads the jQuery Mobile CSS file
+                    loadCss(obj.css);
 
-            // Loads Require.js and tells Require.js to find the mobile intialization file
-            loadRequireJS({ "data-main": obj["data-main"], "src": obj.requirejs });
-          }
+                    // Loads Require.js and tells Require.js to find the mobile intialization file
+                    loadRequireJS({ "data-main":obj["data-main"], "src":obj.requirejs });
+                }
 
-        }, false);
+            }, false);
 
-      })(navigator.userAgent || navigator.vendor || window.opera, window, window.document);
+        })(navigator.userAgent || navigator.vendor || window.opera, window, window.document);
 
-  </script>
+    </script>
 
 </head>
 <body>
 
-  <div data-role="page">
+<div data-role="page">
 
     <header data-role="header"></header>
 
-    <div id="content" class="container-fluid" data-role="content"></div>
+    <div id="main" class="container-fluid" data-role="content"></div>
 
     <footer data-role="footer" class="footer navbar navbar-fixed-bottom">
         <p>
@@ -96,7 +101,7 @@
         </p>
     </footer>
 
-  </div> <!-- /page -->
+</div><!-- /page -->
 
 </body>
 </html>

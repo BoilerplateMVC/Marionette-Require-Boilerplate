@@ -1,11 +1,11 @@
-define(['backbone','marionette', 'views/WelcomeView'], function(Backbone, Marionette, WelcomeView) {
+define(['backbone', 'marionette', 'views/WelcomeView', 'views/MobileHeaderView'], function (Backbone, Marionette, WelcomeView, MobileHeaderView) {
     return Backbone.Marionette.Controller.extend({
-        initialize: function(options) {
-            //do something different here for Mobile
+        initialize:function (options) {
+            App.headerRegion.show(new MobileHeaderView());
         },
         //gets mapped to in AppRouter
-        index: function() {
+        index:function () {
             App.mainRegion.show(new WelcomeView());
         }
-    }) ;
+    });
 });
