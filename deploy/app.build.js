@@ -18,8 +18,8 @@ var baseConfig = {
   // Wraps all scripts in an IIFE (Immediately Invoked Function Expression)
   // (function() { + content + }());
   wrap: true,
-  // The optimized build file will use almond.js (AMD shim) instead of the larger Require.js
-  name: "libs/almond",
+/*  // The optimized build file will use almond.js (AMD shim) instead of the larger Require.js
+  name: "libs/almond",*/
   // Removes third-party license comments
   preserveLicenseComments: false,
   // Uses uglify.js for minification
@@ -34,7 +34,7 @@ var configs = [
         // Tells Require.js to look at mobileInit.js for all mobile shim and path configurations
         mainConfigFile: "../public/js/app/config/MobileInit.js",
         // Points to mobileInit.js (Remember that "mobile" is the module name for mobileInit.js)
-        include: ["mobile"],
+        include: ["mobile"],//, "app/controllers/MobileController"],
         // The optimized mobile build file will put into the app directory
         out: "../public/js/app/config/MobileInit.min.js"
     },
@@ -42,7 +42,7 @@ var configs = [
         // Tells Require.js to look at desktopInit.js for all desktop shim and path configurations
         mainConfigFile: "../public/js/app/config/DesktopInit.js",
         // Points to desktopInit.js (Remember that "desktop" is the module name for desktopInit.js)
-        include: ["desktop"],
+        include: ["desktop"],//, "app/controllers/DesktopController"],
         // The optimized desktop build file will put within the app directory
         out: "../public/js/app/config/DesktopInit.min.js"
     }

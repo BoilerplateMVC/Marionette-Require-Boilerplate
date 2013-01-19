@@ -49,8 +49,6 @@ require.config({
     }
 });
 
-//global variable - initialized in App.js
-var App;
 // Include Desktop Specific JavaScript files here (or inside of your Desktop router)
 require(["jquery", "backbone", "marionette", "app/App", "jquerymobile", "backbone.validateAll"],
     function ($) {

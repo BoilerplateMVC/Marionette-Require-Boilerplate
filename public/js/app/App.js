@@ -1,5 +1,5 @@
-define(['jquery', 'underscore', 'handlebars', 'config/Renderer'],
-    function ($, _, Handlebars, Renderer) {
+define(['jquery', 'underscore', 'handlebars', 'config/Renderer', 'routers/AppRouter'],
+    function ($, _, Handlebars, Renderer, AppRouter) {
         //App is global variable for our instance of Backbone.Marionette.Application
         if (!window.App) {
             var App = new Backbone.Marionette.Application();
@@ -15,13 +15,13 @@ define(['jquery', 'underscore', 'handlebars', 'config/Renderer'],
                 var dependencies;
                 this.mobile = options ? options.mobile : false;
                 if (this.mobile) {
-                    dependencies = ["routers/AppRouter", "controllers/MobileController"];
+                    dependencies = ["controllers/MobileController"];
                 }
                 else {
-                    dependencies = ["routers/AppRouter", "controllers/DesktopController"];
+                    dependencies = ["controllers/DesktopController"];
                 }
                 //set AppRouter's controller to MobileController or DesktopController
-                require(dependencies, function (AppRouter, Controller) {
+                require(dependencies, function (Controller) {
                     App.appRouter = new AppRouter({
                         controller:new Controller()
                     });
