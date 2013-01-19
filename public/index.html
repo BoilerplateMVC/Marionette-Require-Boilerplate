@@ -33,8 +33,8 @@
             // Listen to the DOMContentLoaded Event (Supported in IE9+, Chrome Firefox, Safari)
             w.addEventListener("DOMContentLoaded", function () {
                 // Mobile JavaScript
-                if (true) {
-                //if ((/iPhone|iPod|iPad|Android|BlackBerry|Opera Mini|IEMobile/).test(ua)) {
+
+                if ((/iPhone|iPod|iPad|Android|BlackBerry|Opera Mini|IEMobile/).test(ua)) {
                     loadFiles({
                         "css":"css/libs/jquery.mobile.css",
                         // Change this to "js/app/config/MobileInit.min" for production
