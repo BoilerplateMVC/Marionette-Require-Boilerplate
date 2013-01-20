@@ -9,42 +9,43 @@ var requirejs = require('../public/js/libs/r.js');
 var baseConfig = {
   // All modules are located relative to this path
   baseUrl: "../public/js/",
-  // Sets path names and paths for modules relative to the baseUrl
-  paths: {
-    "mobile": "app/config/MobileInit",
-    "desktop": "app/config/DesktopInit"
-  },
 
   // Wraps all scripts in an IIFE (Immediately Invoked Function Expression)
   // (function() { + content + }());
   wrap: true,
-/*  // The optimized build file will use almond.js (AMD shim) instead of the larger Require.js
-  name: "libs/almond",*/
+
+  //Can optionally use almond.js (AMD shim) instead of the larger Require.js
+  //however this prevents dynamically loaded dependencies from working - using Require.js
+  //gives option to optimize multiple files into a single one, but then dynamically load later
+  //name: "libs/almond",
+
   // Removes third-party license comments
   preserveLicenseComments: false,
+
   // Uses uglify.js for minification
   optimize: "uglify"
  };
 
 // Creates an array of build configs, the baseConfig will
 // be mixed into both the mobile and desktop builds below.
-
 var configs = [
     {
         // Tells Require.js to look at mobileInit.js for all mobile shim and path configurations
         mainConfigFile: "../public/js/app/config/MobileInit.js",
-        // Points to mobileInit.js (Remember that "mobile" is the module name for mobileInit.js)
-        include: ["mobile"],//, "app/controllers/MobileController"],
+        // Loads MobileInit.js and MobileController.js - must add MobileController here since it does not get detected
+        // by r.js static analysis - is loaded dynamically in App.js
+        include: ["app/config/MobileInit", "app/controllers/MobileController"],
         // The optimized mobile build file will put into the app directory
-        out: "../public/js/app/config/MobileInit.min.js"
+        out: "../public/js/app/config/Mobile-build.min.js"
     },
     {
         // Tells Require.js to look at desktopInit.js for all desktop shim and path configurations
         mainConfigFile: "../public/js/app/config/DesktopInit.js",
-        // Points to desktopInit.js (Remember that "desktop" is the module name for desktopInit.js)
-        include: ["desktop"],//, "app/controllers/DesktopController"],
+        // Loads DesktopInit.js and DesktopController.js - must add DesktopController here since it does not get
+        // detected by r.js static analysis - is loaded dynamically in App.js
+        include: ["app/config/DesktopInit", "app/controllers/DesktopController"],
         // The optimized desktop build file will put within the app directory
-        out: "../public/js/app/config/DesktopInit.min.js"
+        out: "../public/js/app/config/Desktop-build.min.js"
     }
 ];
 
