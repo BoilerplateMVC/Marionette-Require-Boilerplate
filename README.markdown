@@ -1,4 +1,4 @@
-Backbone-Require-Boilerplate (BRB)
+Marionette-Require-Boilerplate (MRB)
 ==================================
 ![Example](http://sidnet.info/sites/default/files/marionette-logo.png) ![Example](http://backbonejs.org/docs/images/backbone.png) ![Example](http://requirejs.org/i/logo.png)
 
