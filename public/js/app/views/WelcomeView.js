@@ -1,7 +1,14 @@
-define( ['underscore', 'jquery', 'handlebars', 'text!templates/welcome.html'],
-    function(_, $, Handlebars, template) {
+define( ['underscore', 'jquery', 'handlebars', 'models/Model', 'text!templates/welcome.html'],
+    function(_, $, Handlebars, Model, template) {
         //ItemView provides some default rendering logic
         return Backbone.Marionette.ItemView.extend( {
-            template: template
+            //Template HTML string
+            template: template,
+            model: new Model(),
+
+            // View Event Handlers
+            events: {
+
+            }
         });
     });

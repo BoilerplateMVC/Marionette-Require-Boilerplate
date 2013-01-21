@@ -37,8 +37,8 @@
                 if ((/iPhone|iPod|iPad|Android|BlackBerry|Opera Mini|IEMobile/).test(ua)) {
                     loadFiles({
                         "css":"css/libs/jquery.mobile.css",
-                        // Change this to "js/app/config/Mobile-build.min" for production
-                        "data-main":"js/app/config/Mobile-build.min",
+                        // Change this to "js/app/config/MobileInit.min" for production
+                        "data-main":"js/app/config/MobileInit.min",
                         "requirejs":"js/libs/require.js"
                     });
                 }
@@ -46,8 +46,8 @@
                 else {
                     loadFiles({
                         "css":"css/libs/bootstrap.css",
-                        // Change this to "js/app/config/Desktop-build.min" for production
-                        "data-main":"js/app/config/Desktop-build.min",
+                        // Change this to "js/app/config/DesktopInit.min" for production
+                        "data-main":"js/app/config/DesktopInit.min",
                         "requirejs":"js/libs/require.js"
                     });
                 }

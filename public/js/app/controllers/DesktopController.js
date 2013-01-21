@@ -3,9 +3,9 @@ define(['backbone', 'marionette', 'views/WelcomeView', 'views/DesktopHeaderView'
         initialize:function (options) {
             App.headerRegion.show(new DesktopHeaderView());
         },
-        //gets mapped to in AppRouter
+        //gets mapped to in AppRouter's appRoutes
         index:function () {
-            App.mainRegion.show(new WelcomeView());
+            App.mainRegion.show(welcomeView);
         }
     });
 });

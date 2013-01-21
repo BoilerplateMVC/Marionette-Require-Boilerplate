@@ -14,10 +14,12 @@ var baseConfig = {
   // (function() { + content + }());
   wrap: true,
 
-  //Can optionally use almond.js (AMD shim) instead of the larger Require.js
-  //however this prevents dynamically loaded dependencies from working - using Require.js
-  //gives option to optimize multiple files into a single one, but then dynamically load later
-  //name: "libs/almond",
+  // Can optionally use almond.js (AMD shim) instead of the larger Require.js
+  // However this prevents dynamically loaded dependencies from working. Using Require.js
+  // gives option to optimize multiple files into a single one, but then dynamically load other
+  // dependencies later.  This is necessary since static analysis fails to detect MobileController
+  // and DesktopController since those are loaded dynamically. Using full-on Require.js does work
+  // name: "libs/almond",
 
   // Removes third-party license comments
   preserveLicenseComments: false,
@@ -36,7 +38,7 @@ var configs = [
         // by r.js static analysis - is loaded dynamically in App.js
         include: ["app/config/MobileInit", "app/controllers/MobileController"],
         // The optimized mobile build file will put into the app directory
-        out: "../public/js/app/config/Mobile-build.min.js"
+        out: "../public/js/app/config/MobileInit.min.js"
     },
     {
         // Tells Require.js to look at desktopInit.js for all desktop shim and path configurations
@@ -45,7 +47,7 @@ var configs = [
         // detected by r.js static analysis - is loaded dynamically in App.js
         include: ["app/config/DesktopInit", "app/controllers/DesktopController"],
         // The optimized desktop build file will put within the app directory
-        out: "../public/js/app/config/Desktop-build.min.js"
+        out: "../public/js/app/config/DesktopInit.min.js"
     }
 ];
 
