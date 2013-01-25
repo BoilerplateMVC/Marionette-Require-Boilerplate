@@ -5,7 +5,7 @@ define(['backbone', 'marionette', 'views/WelcomeView', 'views/DesktopHeaderView'
         },
         //gets mapped to in AppRouter's appRoutes
         index:function () {
-            App.mainRegion.show(welcomeView);
+            App.mainRegion.show(new WelcomeView());
         }
     });
 });

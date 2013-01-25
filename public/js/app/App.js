@@ -1,5 +1,5 @@
-define(['jquery', 'underscore', 'handlebars', 'config/Renderer', 'routers/AppRouter'],
-    function ($, _, Handlebars, Renderer, AppRouter) {
+define(['jquery', 'underscore', 'handlebars', 'routers/AppRouter'],
+    function ($, _, Handlebars, AppRouter) {
         //App is global variable for our instance of Backbone.Marionette.Application
         if (!window.App) {
             var App = new Backbone.Marionette.Application();

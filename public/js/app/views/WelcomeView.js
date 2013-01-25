@@ -3,7 +3,7 @@ define( ['underscore', 'jquery', 'handlebars', 'models/Model', 'text!templates/w
         //ItemView provides some default rendering logic
         return Backbone.Marionette.ItemView.extend( {
             //Template HTML string
-            template: template,
+            template: Handlebars.compile(template),
             model: new Model(),
 
             // View Event Handlers
