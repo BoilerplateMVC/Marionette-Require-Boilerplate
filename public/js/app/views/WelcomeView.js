@@ -5,7 +5,7 @@ define( ['underscore', 'jquery', 'handlebars', 'models/Model', 'text!templates/w
             //Template HTML string
             template: Handlebars.compile(template),
             model: new Model({
-                isMobile: App.mobile
+                mobile: App.mobile
             }),
 
             // View Event Handlers
