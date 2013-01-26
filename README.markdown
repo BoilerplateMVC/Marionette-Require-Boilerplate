@@ -172,37 +172,16 @@ WelcomeView.js
 
    Backbone.js View's have a one-to-one relationship with DOM elements, and a View's DOM element is listed in the `el` property, or is created as a simple `div` if none is specified.  The jQuery-wrapped DOM element is then available as `$el`.  The View's `model` is set to a new instance of Model.js, listed above as a dependency.  
 
-   Marionette.ItemView is an extension of the base Backbone.View, but contains some basic logic for rendering and tearing down the view.  Its default implementation of `render` combines the data in the view's `model` with the view's `template`, passing both in to Marionette's `Marionette.Renderer.render` method.  The default implementation of the Renderer uses a `TemplateCache` which looks for templates in `<script>` tags on the page.  This is not how our Require-enabled project is structured, so we write our own implementation of `Marionette.Renderer.render`:
+   Marionette.ItemView is an extension of the base Backbone.View, but contains some basic logic for rendering and tearing down the view.  If a View's `template` attribute is set to a template function created by an engine like Handlebars or Underscore, ItemView's `render` method will automatically render the View's `$el` for you.  Of course you are also free to write your own simple `render` method.  Our `DesktopHeaderView` is a good example of the simplest of possible views:
 
-        Marionette.Renderer.render = function (template, data, view) {
-            var templateFunc;
-            if ( !view ) view = { _engine: 'Handlebars' };
-            if (typeof template === 'function') {
-                templateFunc = template;
-            } else if (typeof template === 'string') {
-                if (view._engine === 'underscore') {
-                    templateFunc = _.template(template);
-                } else {
-                    templateFunc = Handlebars.compile(template);
-                }
-                // cache the templateFunc on the view to prevent recompilation next time
-                view.template = templateFunc;
-                view.options.template = templateFunc
-            }
+define(['underscore', 'jquery', 'handlebars', 'text!templates/desktopHeader.html'],
+    function (_, $, Handlebars, template) {
+        return Backbone.Marionette.ItemView.extend({
+            template:Handlebars.compile(template)
+        });
+    });
 
-            var html = templateFunc(data);
-            return html;
-        };
-
-In this `render` method, `template` can be either a pre-compiled template function or a simple template string.  If it is a template string, then compilation occurs using [Handlebars](http://handlebarsjs.com) as the default templating engine, or Underscore's `_.template()` if the `view` has an `_engine` attribute of `'underscore'`.  The reason I use `_.template` as a fallback is that although the syntax of Handlebars is much more elegant, it is not capable of doing complex evaluation and cannot be used in cases requiring complex view logic.  For this purpose, I like to have underscore/lodash as a fallback templating option.  Also note that once the view's `template` is compiled, the `template` option is set to the `templateFunc` - this prevents a view's template string from being recompiled every time the view is re-rendered.  
-
-   **Note 1**: You do not need to use Underscore.js or Handlebars.  In fact, you don't need to use templates at all, and you don't have to write a custom `Renderer.render` method.  I just included them so you would understand how to use them and see how some basic generic rendering logic can be encapsulated in the `Renderer` construct. 
-
-
-   **Note 2**: Marionette's `Renderer.render` method does not currently expect a `view` parameter as shown here, nor is it passed the view in question in `Marionette.ItemView` or `Marionette.CompositView` which use the method.  I have submitted a [pull request](https://github.com/marionettejs/backbone.marionette/pull/426) to the Marionette project to add this additional parameter to the library in order to achieve my goals mentioned above.  Hopefully this will get accepted soon.  Note that until then, this solution will work just fine with the current Marionette implementation, except that 1) template functions will not be cached on the view and 2) the `_engine` flag will have no effect - all Views will be rendered via Handlebars.
-
-
-   **Note 3**: If you have read all of the documentation up until this point, you will most likely have already noticed that [lodash](https://github.com/bestiejs/lodash) is being used instead of Underscore.js.  Apart from having a bit better cross-browser performance and stability than Underscore.js, lodash also provides a custom build process.  Although I have provided a version of lodash that has all of the Underscore.js methods you would expect, you can download a custom build and swap that in.  Also, it doesn't hurt that Lodash creator, [John-David Dalton](https://twitter.com/jdalton), is an absolute performance and API consistency maniac =)
+Here we use the `text` plugin to load desktopHeader.html in as a template string, and then compile it into a function with Handlebars.  There are handy plugins out there which condense this step for you.  For Handlebars, consider using the [require-handlebars-plugin](https://github.com/SlexAxton/require-handlebars-plugin).  For Underscore, consider [require-tpl](https://github.com/ZeeAgency/requirejs-tpl).
 
    Next you will find an `events` object.  This is where all of your View DOM event handlers associated with the HTML element referenced by your View's `el` property should be stored.  Keep in mind that Backbone is using the jQuery `delegate` method, so it expects a selector that is within your View's `el` property.  I did not include any events by default, so you will have to fill those in yourself.  Below is an example of having an events object with one event handler that calls a View's `someMethod()` method when an element with a class name of _someElement_ is clicked.
 
@@ -215,6 +194,9 @@ In this `render` method, `template` can be either a pre-compiled template functi
 
 
    Finally, I am returning the View class.
+
+
+   **Note**: If you have read all of the documentation up until this point, you will most likely have already noticed that [lodash](https://github.com/bestiejs/lodash) is being used instead of Underscore.js.  Apart from having a bit better cross-browser performance and stability than Underscore.js, lodash also provides a custom build process.  Although I have provided a version of lodash that has all of the Underscore.js methods you would expect, you can download a custom build and swap that in.  Also, it doesn't hurt that Lodash creator, [John-David Dalton](https://twitter.com/jdalton), is an absolute performance and API consistency maniac =)
 
 
 welcome.html

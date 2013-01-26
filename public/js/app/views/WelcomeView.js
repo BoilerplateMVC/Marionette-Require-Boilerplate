@@ -4,7 +4,9 @@ define( ['underscore', 'jquery', 'handlebars', 'models/Model', 'text!templates/w
         return Backbone.Marionette.ItemView.extend( {
             //Template HTML string
             template: Handlebars.compile(template),
-            model: new Model(),
+            model: new Model({
+                isMobile: App.mobile
+            }),
 
             // View Event Handlers
             events: {
