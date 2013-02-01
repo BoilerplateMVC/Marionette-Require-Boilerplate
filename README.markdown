@@ -316,3 +316,6 @@ Brett Jones, Greg Franko
 ## License
 Copyright (c) 2012 Brett Jones, Greg Franko  
 Licensed under the MIT license.		
+
+
+[![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/bitdeli/bd-toydata-widget-gallery/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
