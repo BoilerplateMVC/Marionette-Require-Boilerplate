@@ -17,13 +17,30 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
                 });
 
 
-                it("App Regions should contain views", function() {
-                    expect(App.headerRegion.currentView).toBeDefined();
-                    expect(App.mainRegion.currentView).toBeDefined();
-                });
-
             }); // End of the View test suite
 
+
+            describe("Marionette Views", function() {
+                var value, flag;
+
+                it("App Regions should contain views", function() {
+
+                    //App.appRouter will be instantiated, and views will get created, but asynchronously.
+                    //Wait for it...
+                    waitsFor( function() {
+                        return !!App.appRouter;
+                    }, "App.appRouter should be created", 500);
+
+                    runs(function() {
+                        expect(App.appRouter.options.controller).toBeDefined();
+                        expect(App.headerRegion.currentView).toBeDefined();
+                        expect(App.mainRegion.currentView).toBeDefined();
+                        expect(App.headerRegion.currentView.$el).not.toBeEmpty();
+                        expect(App.mainRegion.currentView.$el).not.toBeEmpty();
+                    });
+                });
+
+            });
             // Backbone Model Suite: contains all tests related to models
             describe("Backbone models", function() {
 
