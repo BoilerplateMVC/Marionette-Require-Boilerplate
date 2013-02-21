@@ -1,5 +1,4 @@
 // Jasmine Unit Testing Suite
-// --------------------------
 define(["jquery", "backbone", "marionette", "models/Model", "collections/Collection", "app/App", "jqueryui", "bootstrap", "backbone.validateAll", "jasminejquery"],
 
     function($, Backbone, Marionette, Model, Collection ) {
@@ -16,15 +15,10 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
                     expect(App.headerRegion.el).toEqual("header");
                 });
 
-
             }); // End of the View test suite
 
-
             describe("Marionette Views", function() {
-                var value, flag;
-
                 it("App Regions should contain views", function() {
-
                     //App.appRouter will be instantiated, and views will get created, but asynchronously.
                     //Wait for it...
                     waitsFor( function() {
@@ -39,7 +33,6 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
                         expect(App.mainRegion.currentView.$el).not.toBeEmpty();
                     });
                 });
-
             });
             // Backbone Model Suite: contains all tests related to models
             describe("Backbone models", function() {
@@ -77,77 +70,6 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
             });
 
         }); // End of the Collection test suite
-
-        /*// Backbone Desktop Router Suite: contains all tests related to Desktop routers
-        describe("Backbone desktop routers", function () {
-
-            // Runs before every Desktop Router spec
-            beforeEach(function () {
-
-                // Stops the router from listening to hashchange events (Required because Backbone will only allow you to run Backbone.history.start() once for each page load.)
-                Backbone.history.stop();
-
-                // Instantiates a new Router instance
-                this.router = new DesktopRouter();
-
-                // Creates a Jasmine spy
-                this.routeSpy = jasmine.createSpy("home");
-
-                // When the route index method is called, the Jasmine spy is also called
-                this.router.on("route:index", this.routeSpy);
-
-            });
-
-            it("should call the desktop router home method when there is no hash on the url", function() {
-
-                // Navigates to a different route
-                this.router.navigate("elsewhere");
-
-                // Navigates to the default route
-                this.router.navigate("", { trigger: true });
-    
-                // Expects the Jasmine spy to have been called
-                expect(this.routeSpy).toHaveBeenCalled();
-
-            });
-
-        }); // End of the Desktop Router test suite
-
-        // Backbone Mobile Router Suite: contains all tests related to Mobile routers
-        describe("Backbone mobile routers", function () {
-
-            // Runs before every Mobile Router spec
-            beforeEach(function () {
-
-                // Stops the router from listening to hashchange events (Required because Backbone will only allow you to run Backbone.history.start() once for each page load.)
-                Backbone.history.stop();
-
-                // Instantiates a new Router instance
-                this.router = new MobileRouter();
-
-                // Creates a Jasmine spy
-                this.routeSpy = jasmine.createSpy("home");
-
-                // When the route index method is called, the Jasmine spy is also called
-                this.router.on("route:index", this.routeSpy);
-
-            });
-
-            it("should call the mobile router home method when there is no hash on the url", function() {
-
-                // Navigates to a different route
-                this.router.navigate("elsewhere");
-
-                // Navigates to the default route
-                this.router.navigate("", { trigger: true });
-    
-                // Expects the Jasmine spy to have been called
-                expect(this.routeSpy).toHaveBeenCalled();
-
-            });
-
-        }); // End of the Mobile Router test suite
-*/
     }); // End of the BRB test suite
 
 });
