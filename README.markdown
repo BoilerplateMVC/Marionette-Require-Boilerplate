@@ -80,9 +80,9 @@ MobileInit.js
 
    **Note**: You do not need a shim configuration for [jQuery](http://www.jquery.com) or [lodash](https://github.com/bestiejs/lodash) because they are both AMD compatible.
 
-   After Require.js is configured, you will notice the `require` method is called.  The `require` method is asynchronously including all of the files/dependencies passed into the first parameter (jQuery, Backbone, Marionette, Lodash, AppRouter, etc) into the page.
+   After Require.js is configured, `require` is called.  The `require` method  asynchronously loads its dependencies, including `App.js`.  As we will discuss later, `App.js` actually exports a global variable, `App`.  
 
-   After all of those files are included on the page, two internal jQuery Mobile properties are turned off to allow Backbone/Marionette to handle all of the routing.
+   After all of those files are loaded, two internal jQuery Mobile properties are turned off to allow Backbone/Marionette to handle all of the routing.
 
             // Prevents all anchor click handling
             $.mobile.linkBindingEnabled = false;
@@ -90,9 +90,7 @@ MobileInit.js
             // Disabling this will prevent jQuery Mobile from handling hash changes
             $.mobile.hashListeningEnabled = false;
 
-   Finally, a new router instance is instantiated to allow you to use Backbone's routing mechanism (keep reading below for more clarification).
-
-   **Note**: You don't need to instantiate a new router instance if you aren't using a Backbone Router class.
+   Then, `App.start( { mobile: true } )` is called, starting our Marionette application and initiating Route handling.
 
 DesktopInit.js
 --------------
