@@ -307,7 +307,7 @@ Cloned project based off of [Greg Franko](https://github.com/gfranko)'s [Backbon
 Added Marionette and Handlebars
 
 ##Contributors
-Brett Jones, Greg Franko
+[Brett Jones](https://github.com/brettjonesdev), [Greg Franko](https://github.com/gfranko), [Nick Pack](https://github.com/nickpack)
 
 ## License
 Copyright (c) 2012 Brett Jones, Greg Franko  
