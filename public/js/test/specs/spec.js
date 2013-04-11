@@ -1,7 +1,7 @@
 // Jasmine Unit Testing Suite
-define(["jquery", "backbone", "marionette", "models/Model", "collections/Collection", "app/App", "jqueryui", "bootstrap", "backbone.validateAll", "jasminejquery"],
+define(["App", "jquery", "backbone", "marionette", "models/Model", "collections/Collection", "jqueryui", "jquerymobile", "bootstrap", "backbone.validateAll", "jasminejquery"],
 
-    function($, Backbone, Marionette, Model, Collection ) {
+    function(App, $, Backbone, Marionette, Model, Collection ) {
 
         // Test suite that includes all of the Jasmine unit tests   
         describe("Marionette-Require-Boilerplate (MRB)", function() {
@@ -23,7 +23,7 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
                     //Wait for it...
                     waitsFor( function() {
                         return !!App.appRouter;
-                    }, "App.appRouter should be created", 500);
+                    }, "App.appRouter should be created", 3000);
 
                     runs(function() {
                         expect(App.appRouter.options.controller).toBeDefined();

@@ -1,4 +1,5 @@
-define(['backbone', 'marionette', 'views/WelcomeView', 'views/DesktopHeaderView'], function (Backbone, Marionette, WelcomeView, DesktopHeaderView) {
+define(['App', 'backbone', 'marionette', 'views/WelcomeView', 'views/DesktopHeaderView'],
+    function (App, Backbone, Marionette, WelcomeView, DesktopHeaderView) {
     return Backbone.Marionette.Controller.extend({
         initialize:function (options) {
             App.headerRegion.show(new DesktopHeaderView());

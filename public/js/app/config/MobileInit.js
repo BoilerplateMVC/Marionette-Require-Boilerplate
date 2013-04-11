@@ -1,29 +1,23 @@
 require.config({
-    baseUrl:"./js",
+    baseUrl:"./js/app",
 
     // 3rd party script alias names (Easier to type "jquery" than "libs/jquery, etc")
     // probably a good idea to keep version numbers in the file names for updates checking
     paths:{
         // Core Libraries
-        "jquery":"libs/jquery",
-        "jquerymobile":"libs/jquery.mobile",
-        "underscore":"libs/lodash",
-        "backbone":"libs/backbone",
-        "marionette":"libs/backbone.marionette",
-        "handlebars":"libs/handlebars",
+        "jquery":"../libs/jquery",
+        "jquerymobile":"../libs/jquery.mobile",
+        "underscore":"../libs/lodash",
+        "backbone":"../libs/backbone",
+        "marionette":"../libs/backbone.marionette",
+        "handlebars":"../libs/handlebars",
 
         // Plugins
-        "backbone.validateAll":"libs/plugins/Backbone.validateAll",
-        "text":"libs/plugins/text",
+        "backbone.validateAll":"../libs/plugins/Backbone.validateAll",
+        "text":"../libs/plugins/text",
 
-        // Application Folders
-        "collections":"app/collections",
-        "models":"app/models",
-        "routers":"app/routers",
-        "templates":"app/templates",
-        "config":"app/config",
-        "controllers":"app/controllers",
-        "views":"app/views"
+        //Mobile specific dependencies
+        "AppController":"controllers/MobileController"
     },
     shim:{
         // jQuery Mobile
@@ -50,8 +44,8 @@ require.config({
 });
 
 // Include Desktop Specific JavaScript files here (or inside of your Desktop router)
-require(["jquery", "backbone", "marionette", "app/App", "jquerymobile", "backbone.validateAll"],
-    function ($) {
+require(["App", "jquery", "backbone", "marionette", "jquerymobile", "backbone.validateAll"],
+    function (App, $) {
         // Prevents all anchor click handling
         $.mobile.linkBindingEnabled = false;
         // Disabling this will prevent jQuery Mobile from handling hash changes
