@@ -4,7 +4,7 @@ Marionette-Require-Boilerplate (MRB)
 
 
 #Description
-A Marionette.js, Backbone.js and Require.js Boilerplate that promotes decoupling your JavaScript into modules, separating business logic from application logic using Collections/Models, Regions and Views, reusing your JavaScript between Desktop and Mobile Web versions while using a mobile framework (jQuery Mobile), including non-AMD Compatible Third Party Scripts in your project, optimizing all of your JavaScript (minify, concatenate, etc), and unit testing your JavaScript.
+A Marionette.js, Backbone.js and Require.js Boilerplate that promotes decoupling your JavaScript into modules, separating business logic from application logic using Collections/Models, Regions and Views, reusing your JavaScript between Desktop and Mobile Web versions while using a mobile framework (jQuery Mobile), including non-AMD Compatible Third Party Scripts in your project, optimizing all of your JavaScript (minify, concatenate, etc), and unit testing your JavaScript.  Part of the [BoilerplateMVC](https://github.com/BoilerplateMVC) suite.
 
 #Getting Started
    1. Download and install [Node.js](http://nodejs.org/#download)
@@ -16,7 +16,8 @@ A Marionette.js, Backbone.js and Require.js Boilerplate that promotes decoupling
    7. Next, type `nodemon` (this will start your Node.js web server and restart the server any time you make a file change thanks to the wonderful **nodemon** library)
    8. To view the demo page, go to `http://localhost:8001`
    9. To view the Jasmine test suite page, go to `http://localhost:8001/specRunner.html`
-   10. Enjoy using Marionette, Backbone, Require, Grunt, Lodash, jQuery, jQueryUI, jQuery Mobile, Twitter Bootstrap, and Handlebars (enjoyment optional)
+   10. Type `grunt` to run your grunt build and create minified .js and .css files   
+   11. Enjoy using Marionette, Backbone, Require, Grunt, Lodash, jQuery, jQueryUI, jQuery Mobile, Twitter Bootstrap, and Handlebars!
 
 #Tour of the Boilerplate Files
 
