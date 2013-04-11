@@ -6,34 +6,58 @@ Marionette-Require-Boilerplate (MRB)
 A Marionette.js, Backbone.js and Require.js Boilerplate that promotes decoupling your JavaScript into modules, separating business logic from application logic using Collections/Models, Regions and Views, reusing your JavaScript between Desktop and Mobile Web versions while using a mobile framework (jQuery Mobile), including non-AMD Compatible Third Party Scripts in your project, optimizing all of your JavaScript (minify, concatenate, etc), and unit testing your JavaScript.
 
 #Getting Started
+#Getting Started
    1. Download and install [Node.js](http://nodejs.org/#download)
    2. Clone this repository
    3. On the command line, type `npm install nodemon -g` to install the [nodemon](https://github.com/remy/nodemon) library globally.  If it complains about user permissions type `sudo npm install nodemon -g`.
-   3. On the command line, navigate to inside of the **Marionette-Require-Boilerplate** folder and type `npm install`
-   4. Next, type `nodemon` (this will start your Node.js web server and restart the server any time you make a file change thanks to the wonderful  library)
-   5. To view the demo page, go to `http://localhost:8001`
-   6. To view the Jasmine test suite page, go to `http://localhost:8001/specRunner.html`
-   7. Enjoy using Marionette, Backbone, Require, Lodash, jQuery, jQueryUI, jQuery Mobile, Twitter Bootstrap, and Handlebars (enjoyment optional)
+   4.  If you have installed [Grunt](http://gruntjs.com/) globally in the past, you will need to remove it first by typing `npm uninstall -g grunt`.  If it complains about user permissions, type `sudo npm uninstall -g grunt`.
+   5.  Next, install the latest version of [Grunt](http://gruntjs.com/) by typing `npm install -g grunt-cli`.  If it complains about user permissions, type `sudo npm install -g grunt-cli`. 
+   6. Navigate to inside of the **Backbone-Require-Boilerplate** folder and type `npm install`
+   7. Next, type `nodemon` (this will start your Node.js web server and restart the server any time you make a file change thanks to the wonderful **nodemon** library)
+   8. To view the demo page, go to `http://localhost:8001`
+   9. To view the Jasmine test suite page, go to `http://localhost:8001/specRunner.html`
+   10. Enjoy using Marionette, Backbone, Require, Grunt, Lodash, jQuery, jQueryUI, jQuery Mobile, Twitter Bootstrap, and Handlebars (enjoyment optional)
 
 #Tour of the Boilerplate Files
 
 index.html
 ----------
-   Uses a large portion of the [HTML5 Boilerplate](https://github.com/h5bp/html5-boilerplate) HTML and CSS.  You will notice there is a simple JavaScript mobile browser detection script to determine if a user is using a mobile or desktop browser.  The mobile detection script is within a **DOMContentLoaded** HTML5 JavaScript event handler (not supported in IE 6-8), which will trigger once the DOM is ready (the jQuery `ready()` event cannot be used because jQuery is loaded by Require.js and not yet included on the page).
+   Uses a large portion of the [HTML5 Boilerplate](https://github.com/h5bp/html5-boilerplate) HTML and CSS.  As you continue down the page to the first `<script>` tag, you will notice there is a `production` local JavaScript variable that is used to communicate to your application whether you would like to load production or development CSS and JavaScript files.
 
    _Mobile Detection Script_
 
-   If a mobile browser is found, then Require.js is included asynchronously within the HTML page, and the Require.js script tag HTML5 data attribute, `data-main`, is set to `js/app/config/MobileInit` (this tells Require.js to look for a MobileInit.js file inside of the config folder).  The jQuery Mobile CSS file is also included asynchronously.
+   There is also a simple JavaScript mobile browser detection script that stores different production/development CSS and JavaScript files within a local `config` object based on whether a user is using a mobile or desktop browser.
 
-   If a desktop device is found, then Require.js is included asynchronously within the HTML page, and the Require.js script tag HTML5 data attribute, `data-main`, is set to `js/app/config/DesktopInit` (this tells Require.js to look for a DesktopInit.js file inside of the config folder).
+
+   _Loading Files_
+
+   The `loadFiles()` method is then used to load all of the correct CSS and JavaScript files.  Below is what get's included:
+
+   _Mobile or Tablet Browser_
+
+   If a mobile browser is found, then Require.js is included asynchronously within the HTML page, and the Require.js script tag HTML5 data attribute, `data-main`, is set to `js/app/config/MobileInit` (this tells Require.js to look for a MobileInit.js file inside of the config folder).  The combined jQuery Mobile and common CSS file are also included asynchronously.
+
+   _Desktop Browser_
+
+   If a desktop device is found, then Require.js is included asynchronously within the HTML page, and the Require.js script tag HTML5 data attribute, `data-main`, is set to `js/app/config/DesktopInit` (this tells Require.js to look for a DesktopInit.js file inside of the config folder).  The combined Bootstrap and common CSS file are also included asynchronously.
 
    **Note**:  You do not need to use the JavaScript mobile detection script for your application to use Backbone.js or Require.js. I just put it in so that you could see an example of how to separate your Mobile and Desktop JavaScript logic.
 
+   _Production Mode_
+
+   In production mode, your app's single minified and concatenated JavaScript file is loaded instead.  Your application's minified common CSS file is also included.
+
+   _Development Mode_
+
+  In development mode, your app's non-minified JavaScript files are loaded using Require.js instead of Almond.js.  Your application's non-minified common CSS file is also included.
+
    _Loader Methods_
 
-   You will notice that the CSS files and the Require.js file are being included on the page via the `loadCss()` and `loadRequireJS()` methods.  Require.js does not officially support [loading CSS files](http://requirejs.org/docs/faq-advanced.html#css), which is why I included the `loadCSS()` method to asynchronously include any CSS file.  Loading CSS asynchronously also allows me the flexibility/mechanism to load different CSS files if a user is on a mobile device.
+   You will notice that the CSS files and the Require.js file are being included on the page via the `loadFiles()` method (which uses the `loadCss()` and `loadJS()` methods internally).  Require.js does not officially support [loading CSS files](http://requirejs.org/docs/faq-advanced.html#css), which is why I included the `loadCSS()` method to asynchronously include CSS files.  Loading CSS asynchronously also allows the flexibilty/mechanism to load different CSS files if a user is on a mobile/desktop device.
 
-   I included the `loadRequireJS` file, the Desktop and Mobile versions of the boilerplate point Require.js to two different files.  Including Require.js asynchronously within the `loadRequireJS` method allowed me the flexibility to do that. 
+   I included the `loadJS()` method since the Desktop/Mobile versions of the boilerplate point Require.js to two different files.  Including Require.js asynchronously within the `loadJS` method provides the flexibility to do that.
+
+   **Note:** Feel free to use the `loadCSS()` and `loadJS()` methods to load any other dependencies your application may have that you do not want to use Require.js for.
 
 MobileInit.js
 -------------
