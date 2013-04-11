@@ -1,8 +1,9 @@
 define(['jquery', 'underscore', 'handlebars', 'routers/AppRouter'],
     function ($, _, Handlebars, AppRouter) {
         //App is global variable for our instance of Backbone.Marionette.Application
+        var App;
         if (!window.App) {
-            var App = new Backbone.Marionette.Application();
+            App = new Backbone.Marionette.Application();
 
             //Organize Application into regions corresponding to DOM elements
             //Regions can contain views, Layouts, or subregions nested as necessary
