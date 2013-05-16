@@ -26,7 +26,7 @@
             // App Environment
             // ---------------
             //  Tip: Set to true to turn on "production" mode
-            var production = false,
+            var production = true,
                     filesToLoad,
             //BoilerplateMVC Helper Methods
                     boilerplateMVC = {
@@ -102,7 +102,8 @@
                     // JavaScript initialization file that is also loaded when in development mode
                     "dev-init": "js/app/init/MobileInit.js",
                     // JavaScript file that is loaded when in production mode
-                    "prod-js": "js/app/init/MobileInit.min.js",
+                    "prod-init": "js/app/init/MobileInit.min.js",
+                    "prod-js": { "data-main": "js/app/config/config.js", "src": "js/libs/require.js" }
                 };
 
             }
@@ -121,7 +122,8 @@
                     // JavaScript initialization file that is loaded when in development mode
                     "dev-init": "js/app/init/DesktopInit.js",
                     // JavaScript file that is loaded when in production mode
-                    "prod-js": "js/app/init/DesktopInit.min.js"
+                    "prod-init": "js/app/init/DesktopInit.min.js",
+                    "prod-js": { "data-main": "js/app/config/config.js", "src": "js/libs/require.js" }
                 };
 
             }
@@ -129,6 +131,8 @@
             boilerplateMVC.loadFiles(production, filesToLoad, function() {
                 if(!production && window.require) {
                     require([filesToLoad["dev-init"]]);
+                } else if ( production ) {
+                    require([filesToLoad["prod-init"]])
                 }
             });
 
@@ -155,12 +159,5 @@
 
 </body>
 </html>
-
-
-
-
-
-
-
 
 

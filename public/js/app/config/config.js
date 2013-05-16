@@ -15,7 +15,8 @@ require.config({
         // Plugins
         "backbone.validateAll":"../libs/plugins/Backbone.validateAll",
         "bootstrap":"../libs/plugins/bootstrap",
-        "text":"../libs/plugins/text",
+        "text":"../libs/plugins/text"
+
     },
     // Sets the configuration for your third party scripts that are not AMD compatible
     shim:{

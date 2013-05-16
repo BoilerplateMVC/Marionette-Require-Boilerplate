@@ -5,19 +5,19 @@ module.exports = function(grunt) {
         requirejs: {
             mobileJS: {
                 options: {
-                    baseUrl: "public/js/",
+                    baseUrl: "public/js/app",
                     paths: {
-                        "mobile": "app/init/MobileInit",
-                        "mobileController": "app/controllers/MobileController"
+                        "mobile": "init/MobileInit",
+                        "mobileController": "controllers/MobileController"
                     },
                     wrap: true,
                     // Cannot use almond since DesktopController/MobileController are loaded dynamically, and static analysis will fail to detect this
-                    // must include MobileController manuall
+                    // must include MobileController manually
                     // name: "libs/almond",
                     preserveLicenseComments: false,
                     optimize: "uglify",
                     optimizeCss: "standard",
-                    mainConfigFile: "public/js/app/config/MobileInit.js",
+                    mainConfigFile: "public/js/app/config/config.js",
                     include: ["mobile", "mobileController"],
                     out: "public/js/app/init/MobileInit.min.js"
                 }
@@ -31,18 +31,18 @@ module.exports = function(grunt) {
             },
             desktopJS: {
                 options: {
-                    baseUrl: "public/js/",
+                    baseUrl: "public/js/app",
                     paths: {
-                        "desktop": "app/init/DesktopInit",
-                        "desktopController": "app/controllers/DesktopController"
+                        "desktop": "init/DesktopInit",
+                        "desktopController": "controllers/DesktopController"
                     },
                     wrap: true,
                     // Cannot use almond since DesktopController/MobileController are loaded dynamically, and static analysis will fail to detect this
-                    // must include MobileController manuall
+                    // must include DesktopController manually
                     // name: "libs/almond",
                     preserveLicenseComments: false,
                     optimize: "uglify",
-                    mainConfigFile: "public/js/app/config/DesktopInit.js",
+                    mainConfigFile: "public/js/app/config/config.js",
                     include: ["desktop", "desktopController"],
                     out: "public/js/app/init/DesktopInit.min.js"
                 }
