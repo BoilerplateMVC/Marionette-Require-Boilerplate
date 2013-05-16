@@ -1,16 +1,17 @@
 <!doctype html>
 <html>
 <head>
-  <title>Jasmine Spec Runner</title>
-  <link rel="stylesheet" type="text/css" href="css/jasmine.css">
-  <script src="js/libs/require.js" data-main="js/test/config/TestInit"></script>
+    <title>Jasmine Spec Runner</title>
+    <link rel="stylesheet" type="text/css" href="css/jasmine.css">
+    <script src="js/libs/require.js" data-main="js/app/config/config"></script>
 </head>
 <body>
-
-<div data-role="page" style="display: none;">
-    <header data-role="header"></header>
-    <div id="main" class="container-fluid" data-role="content"></div>
-</div>
-
+<script>
+    // Add your Jasmine spec files here
+    require(["../../test/specs/spec"], function (spec) {
+        jasmine.getEnv().addReporter(new jasmine.TrivialReporter());
+        jasmine.getEnv().execute();
+    });
+</script>
 </body>
 </html>

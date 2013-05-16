@@ -12,8 +12,10 @@ define(['jquery', 'backbone', 'underscore', 'handlebars', 'routers/AppRouter'],
         App.addInitializer(function (options) {
             this.mobile = options ? options.mobile : false;
 
+            var AppController = (App.mobile ? "controllers/MobileController" : "controllers/DesktopController");
+
             //load AppController asynchronously, since it requires App.js
-            require( ["AppController"], function(AppController) {
+            require( [AppController], function(AppController) {
                 App.appRouter = new AppRouter({
                     controller:new AppController()
                 });

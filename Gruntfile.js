@@ -7,7 +7,7 @@ module.exports = function(grunt) {
                 options: {
                     baseUrl: "public/js/",
                     paths: {
-                        "mobile": "app/config/MobileInit",
+                        "mobile": "app/init/MobileInit",
                         "mobileController": "app/controllers/MobileController"
                     },
                     wrap: true,
@@ -19,7 +19,7 @@ module.exports = function(grunt) {
                     optimizeCss: "standard",
                     mainConfigFile: "public/js/app/config/MobileInit.js",
                     include: ["mobile", "mobileController"],
-                    out: "public/js/app/config/MobileInit.min.js"
+                    out: "public/js/app/init/MobileInit.min.js"
                 }
             },
             mobileCSS: {
@@ -33,7 +33,7 @@ module.exports = function(grunt) {
                 options: {
                     baseUrl: "public/js/",
                     paths: {
-                        "desktop": "app/config/DesktopInit",
+                        "desktop": "app/init/DesktopInit",
                         "desktopController": "app/controllers/DesktopController"
                     },
                     wrap: true,
@@ -44,7 +44,7 @@ module.exports = function(grunt) {
                     optimize: "uglify",
                     mainConfigFile: "public/js/app/config/DesktopInit.js",
                     include: ["desktop", "desktopController"],
-                    out: "public/js/app/config/DesktopInit.min.js"
+                    out: "public/js/app/init/DesktopInit.min.js"
                 }
             },
             desktopCSS: {

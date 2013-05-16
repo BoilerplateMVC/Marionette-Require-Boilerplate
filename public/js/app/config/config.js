@@ -6,6 +6,7 @@ require.config({
         // Core Libraries
         "jquery":"../libs/jquery",
         "jqueryui":"../libs/jqueryui",
+        "jquerymobile":"../libs/jquery.mobile",
         "underscore":"../libs/lodash",
         "backbone":"../libs/backbone",
         "marionette":"../libs/backbone.marionette",
@@ -15,9 +16,6 @@ require.config({
         "backbone.validateAll":"../libs/plugins/Backbone.validateAll",
         "bootstrap":"../libs/plugins/bootstrap",
         "text":"../libs/plugins/text",
-
-        //Desktop specific dependencies
-        "AppController":"controllers/DesktopController"
     },
     // Sets the configuration for your third party scripts that are not AMD compatible
     shim:{
@@ -25,6 +23,9 @@ require.config({
         "bootstrap":["jquery"],
         // jQueryUI
         "jqueryui":["jquery"],
+        // jQuery mobile
+        "jquerymobile":["jqueryui"],
+
         // Backbone
         "backbone":{
             // Depends on underscore/lodash and jQuery
@@ -45,10 +46,3 @@ require.config({
         "backbone.validateAll":["backbone"]
     }
 });
-
-// Includes Desktop Specific JavaScript files here (or inside of your Desktop router)
-require(["App", "jquery", "backbone", "marionette", "jqueryui", "bootstrap", "backbone.validateAll"],
-    function (App) {
-        // Start Marionette Application in desktop mode (default)
-        App.start();
-    });
