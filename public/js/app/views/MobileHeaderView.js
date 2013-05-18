@@ -1,5 +1,5 @@
-define(['underscore', 'jquery', 'jquerymobile', 'handlebars', 'text!templates/mobileHeader.html'],
-    function (_, $, jqm,  Handlebars, template) {
+define(['backbone','marionette', 'jquery', 'jquerymobile', 'handlebars', 'text!templates/mobileHeader.html'],
+    function (Backbone, Marionette, $, jqm,  Handlebars, template) {
         return Backbone.Marionette.ItemView.extend({
             template: Handlebars.compile(template),
 

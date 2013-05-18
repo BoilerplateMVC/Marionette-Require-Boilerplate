@@ -21,10 +21,10 @@ require.config({
     //determine which module is loaded depending on which module is doing the loading.
     //See http://requirejs.org/docs/api.html#config-map for more
     map:{
-        "init/DesktopInit": {
+        "init/Desktop": {
             "AppController":"controllers/DesktopController"
         },
-        "init/MobileInit": {
+        "init/Mobile": {
             "AppController":"controllers/MobileController"
         },
         "controllers/DesktopController":{

@@ -6,10 +6,6 @@ module.exports = function(grunt) {
             mobileJS: {
                 options: {
                     baseUrl: "public/js/app",
-                    paths: {
-                        "mobile": "init/MobileInit",
-                        "mobileController": "controllers/MobileController"
-                    },
                     wrap: true,
                     // Cannot use almond since DesktopController/MobileController are loaded dynamically, and static analysis will fail to detect this
                     // must include MobileController manually
@@ -18,7 +14,7 @@ module.exports = function(grunt) {
                     optimize: "uglify",
                     optimizeCss: "standard",
                     mainConfigFile: "public/js/app/config/config.js",
-                    include: ["mobile", "mobileController"],
+                    include: ["init/MobileInit"],
                     out: "public/js/app/init/MobileInit.min.js"
                 }
             },
@@ -32,10 +28,6 @@ module.exports = function(grunt) {
             desktopJS: {
                 options: {
                     baseUrl: "public/js/app",
-                    paths: {
-                        "desktop": "init/DesktopInit",
-                        "desktopController": "controllers/DesktopController"
-                    },
                     wrap: true,
                     // Cannot use almond since DesktopController/MobileController are loaded dynamically, and static analysis will fail to detect this
                     // must include DesktopController manually
@@ -43,7 +35,7 @@ module.exports = function(grunt) {
                     preserveLicenseComments: false,
                     optimize: "uglify",
                     mainConfigFile: "public/js/app/config/config.js",
-                    include: ["desktop", "desktopController"],
+                    include: ["init/DesktopInit"],
                     out: "public/js/app/init/DesktopInit.min.js"
                 }
             },
