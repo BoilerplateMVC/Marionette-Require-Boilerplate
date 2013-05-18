@@ -1,4 +1,4 @@
-define(['App', 'backbone', 'marionette', 'views/WelcomeView', 'views/DesktopHeaderView'],
+define(['App', 'backbone', 'marionette', 'views/WelcomeView', 'HeaderView'],
     function (App, Backbone, Marionette, WelcomeView, DesktopHeaderView) {
     return Backbone.Marionette.Controller.extend({
         initialize:function (options) {

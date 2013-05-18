@@ -18,6 +18,22 @@ require.config({
         "text":"../libs/plugins/text"
 
     },
+    //determine which module is loaded depending on which module is doing the loading.
+    //See http://requirejs.org/docs/api.html#config-map for more
+    map:{
+        "init/DesktopInit": {
+            "AppController":"controllers/DesktopController"
+        },
+        "init/MobileInit": {
+            "AppController":"controllers/MobileController"
+        },
+        "controllers/DesktopController":{
+            "HeaderView":"views/DesktopHeaderView"
+        },
+        "controllers/MobileController":{
+            "HeaderView":"views/MobileHeaderView"
+        }
+    },
     // Sets the configuration for your third party scripts that are not AMD compatible
     shim:{
         // Twitter Bootstrap jQuery plugins

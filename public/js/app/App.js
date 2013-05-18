@@ -1,5 +1,5 @@
-define(['jquery', 'backbone', 'underscore', 'handlebars', 'routers/AppRouter'],
-    function ($, Backbone, _, Handlebars, AppRouter) {
+define(['jquery', 'backbone', 'underscore', 'handlebars'],
+    function ($, Backbone, _, Handlebars) {
         var App = new Backbone.Marionette.Application();
 
         //Organize Application into regions corresponding to DOM elements
@@ -11,16 +11,7 @@ define(['jquery', 'backbone', 'underscore', 'handlebars', 'routers/AppRouter'],
 
         App.addInitializer(function (options) {
             this.mobile = options ? options.mobile : false;
-
-            var AppController = (App.mobile ? "controllers/MobileController" : "controllers/DesktopController");
-
-            //load AppController asynchronously, since it requires App.js
-            require( [AppController], function(AppController) {
-                App.appRouter = new AppRouter({
-                    controller:new AppController()
-                });
-                Backbone.history.start();
-            });
+            Backbone.history.start();
         });
 
         return App;
