@@ -7,14 +7,14 @@ module.exports = function(grunt) {
                 options: {
                     baseUrl: "public/js/app",
                     wrap: true,
-                    // Cannot use almond since DesktopController/MobileController are loaded dynamically, and static analysis will fail to detect this
-                    // must include MobileController manually
-                    // name: "libs/almond",
+                    // Cannot use almond since it does not currently appear to support requireJS's config-map
+                    //name: "../libs/almond",
                     preserveLicenseComments: false,
                     optimize: "uglify",
                     optimizeCss: "standard",
                     mainConfigFile: "public/js/app/config/config.js",
                     include: ["init/MobileInit"],
+                    insertRequire:["init/MobileInit"],
                     out: "public/js/app/init/MobileInit.min.js"
                 }
             },
@@ -29,13 +29,13 @@ module.exports = function(grunt) {
                 options: {
                     baseUrl: "public/js/app",
                     wrap: true,
-                    // Cannot use almond since DesktopController/MobileController are loaded dynamically, and static analysis will fail to detect this
-                    // must include DesktopController manually
-                    // name: "libs/almond",
+                    // Cannot use almond since it does not currently appear to support requireJS's config-map
+                    //name: "../libs/almond",
                     preserveLicenseComments: false,
                     optimize: "uglify",
                     mainConfigFile: "public/js/app/config/config.js",
                     include: ["init/DesktopInit"],
+                    insertRequire: ["init/DesktopInit"],
                     out: "public/js/app/init/DesktopInit.min.js"
                 }
             },

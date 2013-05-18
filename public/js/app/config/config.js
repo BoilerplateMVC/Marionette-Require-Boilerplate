@@ -19,16 +19,14 @@ require.config({
 
     },
     //determine which module is loaded depending on which module is doing the loading.
-    //See http://requirejs.org/docs/api.html#config-map for more
+    //See http://requirejs.org/docs/api.html#config-map for more information
     map:{
-        "init/Desktop": {
-            "AppController":"controllers/DesktopController"
+        "*": {
+            "AppController":"controllers/DesktopController",
+            "HeaderView":"views/DesktopHeaderView"
         },
         "init/Mobile": {
             "AppController":"controllers/MobileController"
-        },
-        "controllers/DesktopController":{
-            "HeaderView":"views/DesktopHeaderView"
         },
         "controllers/MobileController":{
             "HeaderView":"views/MobileHeaderView"
