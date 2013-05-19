@@ -11,12 +11,14 @@ require.config({
         "backbone":"../libs/backbone",
         "marionette":"../libs/backbone.marionette",
         "handlebars":"../libs/handlebars",
+        "jasmine": "../libs/jasmine",
+        "jasmine-html": "../libs/jasmine-html",
 
         // Plugins
         "backbone.validateAll":"../libs/plugins/Backbone.validateAll",
         "bootstrap":"../libs/plugins/bootstrap",
-        "text":"../libs/plugins/text"
-
+        "text":"../libs/plugins/text",
+        "jasminejquery": "../libs/plugins/jasmine-jquery"
     },
     // Sets the configuration for your third party scripts that are not AMD compatible
     shim:{
@@ -44,6 +46,16 @@ require.config({
             "exports":"Handlebars"
         },
         // Backbone.validateAll plugin that depends on Backbone
-        "backbone.validateAll":["backbone"]
+        "backbone.validateAll":["backbone"],
+
+        "jasmine": {
+            // Exports the global 'window.jasmine' object
+            "exports": "jasmine"
+        },
+
+        "jasmine-html": {
+            "deps": ["jasmine"],
+            "exports": "jasmine"
+        }
     }
 });

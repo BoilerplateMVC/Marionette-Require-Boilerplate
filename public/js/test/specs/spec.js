@@ -1,12 +1,9 @@
 // Jasmine Unit Testing Suite
-define(["App", "jquery", "backbone", "marionette", "models/Model", "collections/Collection", "jqueryui", "jquerymobile", "bootstrap", "backbone.validateAll", "jasminejquery"],
-
-    function(App, $, Backbone, Marionette, Model, Collection ) {
-
-        // Test suite that includes all of the Jasmine unit tests   
+define(["jquery", "backbone", "marionette", "models/Model", "collections/Collection", "views/WelcomeView","views/DesktopHeaderView","views/MobileHeaderView","jqueryui", "jquerymobile", "bootstrap", "backbone.validateAll", "jasminejquery"],
+    function($, Backbone, Marionette, Model, Collection, WelcomeView, DesktopHeaderView, MobileHeaderView) {
+        // Test suite that includes all of the Jasmine unit tests
         describe("Marionette-Require-Boilerplate (MRB)", function() {
-
-            // Backbone View Suite: contains all tests related to views
+            /*// Backbone View Suite: contains all tests related to views
             describe("Desktop Marionette App instantiation", function() {
                 //Initialize App in Desktop Mode (App is global var)
                 App.start();
@@ -15,23 +12,19 @@ define(["App", "jquery", "backbone", "marionette", "models/Model", "collections/
                     expect(App.headerRegion.el).toEqual("header");
                 });
 
-            }); // End of the View test suite
+            }); // End of the View test suite*/
 
             describe("Marionette Views", function() {
-                it("App Regions should contain views", function() {
-                    //App.appRouter will be instantiated, and views will get created, but asynchronously.
-                    //Wait for it...
-                    waitsFor( function() {
-                        return !!App.appRouter;
-                    }, "App.appRouter should be created", 3000);
+                it("Instantiate some Views", function() {
+                    var container = $("#container");
+                    var welcomeView = new WelcomeView();
+                    container.append(welcomeView.render().$el);
 
-                    runs(function() {
-                        expect(App.appRouter.options.controller).toBeDefined();
-                        expect(App.headerRegion.currentView).toBeDefined();
-                        expect(App.mainRegion.currentView).toBeDefined();
-                        expect(App.headerRegion.currentView.$el).not.toBeEmpty();
-                        expect(App.mainRegion.currentView.$el).not.toBeEmpty();
-                    });
+                    var desktopHeaderView = new DesktopHeaderView();
+                    container.append(desktopHeaderView.render().$el);
+
+                    var mobileHeaderView = new MobileHeaderView();
+                    container.append(mobileHeaderView.render().$el);
                 });
             });
             // Backbone Model Suite: contains all tests related to models
@@ -57,19 +50,19 @@ define(["App", "jquery", "backbone", "marionette", "models/Model", "collections/
 
             }); // End of the Model test suite
 
-        // Backbone Collection Suite: contains all tests related to collections
-        describe("Backbone collections", function() {
-            // Runs before every Collection spec
-            beforeEach(function() {
-                // Instantiates a new Collection instance
-                this.collection = new Collection();
-            });
+            // Backbone Collection Suite: contains all tests related to collections
+            describe("Backbone collections", function() {
+                // Runs before every Collection spec
+                beforeEach(function() {
+                    // Instantiates a new Collection instance
+                    this.collection = new Collection();
+                });
 
-            it("should contain the correct number of models", function() {
-                expect(this.collection.length).toEqual(0);
-            });
+                it("should contain the correct number of models", function() {
+                    expect(this.collection.length).toEqual(0);
+                });
 
-        }); // End of the Collection test suite
-    }); // End of the BRB test suite
+            }); // End of the Collection test suite
+        }); // End of the BRB test suite
 
 });
