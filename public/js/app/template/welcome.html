@@ -5,11 +5,13 @@
     <p class="muted">
         You are viewing this application on
         {{#if mobile}}
-        <strong>Mobile</strong>
+        {{!"mobile" key in i18n file}}
+        <strong>{{$ mobile}}</strong>
         {{else}}
-        <strong>Desktop</strong>
+        {{!"desktop" key in i18n file}}
+        <strong>{{$ desktop}}</strong>
         {{/if}}.
     </p>
-    <br/>
-    <a class="btn btn-primary btn-large" href="https:github.com/BoilerplateMVC/">See more Boilerplates</a>
+    <p>Part of the <a href="https:github.com/BoilerplateMVC/">BoilerplateMVC suite</a>.</p>
+    <p>{{yeller "Marionette is great"}}</p>
 </div>
