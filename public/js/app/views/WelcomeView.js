@@ -1,9 +1,8 @@
-define( ['App', 'backbone', 'marionette', 'underscore', 'jquery', 'handlebars', 'models/Model', 'text!templates/welcome.html'],
-    function(App, Backbone, Marionette, _, $, Handlebars, Model, template) {
+define( ['App', 'backbone', 'marionette', 'jquery', 'models/Model', 'hbs!template/welcome'],
+    function(App, Backbone, Marionette, $, Model, template) {
         //ItemView provides some default rendering logic
         return Backbone.Marionette.ItemView.extend( {
-            //Template HTML string
-            template: Handlebars.compile(template),
+            template: template,
             model: new Model({
                 mobile: App.mobile
             }),
