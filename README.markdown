@@ -4,7 +4,7 @@ Marionette-Require-Boilerplate (MRB)
 
 
 #Description
-A Marionette.js and Require.js Boilerplate that promotes decoupling your JavaScript into modules, separating business logic from application logic using Collections/Models, Regions and Views, reusing your JavaScript between Desktop and Mobile Web versions while using a mobile framework (jQuery Mobile), including non-AMD Compatible Third Party Scripts in your project, optimizing your JavaScript and CSS files (minify, concatenate, etc), and unit testing your JavaScript.  Part of the [BoilerplateMVC](https://github.com/BoilerplateMVC) suite.
+> A Marionette.js and Require.js Boilerplate that promotes decoupling your JavaScript into modules, separating business logic from application logic using Collections/Models, Regions and Views, reusing your JavaScript between Desktop and Mobile Web versions while using a mobile framework (jQuery Mobile), including non-AMD Compatible Third Party Scripts in your project, optimizing your JavaScript and CSS files (minify, concatenate, etc), and unit testing your JavaScript.  Part of the [BoilerplateMVC](https://github.com/BoilerplateMVC) suite.
 
 #Getting Started
    1. Download and install [Node.js](http://nodejs.org/#download)
@@ -23,105 +23,111 @@ A Marionette.js and Require.js Boilerplate that promotes decoupling your JavaScr
 
 index.html
 ----------
-   Uses a large portion of the [HTML5 Boilerplate](https://github.com/h5bp/html5-boilerplate) HTML and CSS.  As you continue down the page to the first `<script>` tag, you will notice there is a `production` local JavaScript variable that is used to communicate to your application whether you would like to load production or development CSS and JavaScript files.
 
-   _Mobile Detection Script_
+### HTML5 Boilerplate
 
-   There is also a simple JavaScript mobile browser detection script that stores different production/development CSS and JavaScript files within a local `config` object based on whether a user is using a mobile or desktop browser.
+Uses a large portion of the [HTML5 Boilerplate](https://github.com/h5bp/html5-boilerplate) HTML and CSS.
 
+### Environment
 
-   _Loading Files_
+As you continue down the page to the first `<script>` tag, you will notice there is a local JavaScript variable, called `production`, that is used to communicate to your application whether you would like to load production or development CSS and JavaScript files.
 
-   The `loadFiles()` method is then used to load all of the correct CSS and JavaScript files.  Below is what get's included:
+### BoilerplateMVC Helper Methods
 
-   _Mobile or Tablet Browser_
+To load our production/development CSS and JavaScript files, you can use the handy BoilerplateMVC helper methods included directly in our HTML page.  Below are the available helper methods:
 
-   If a mobile browser is found, then Require.js is included asynchronously within the HTML page, and the Require.js script tag HTML5 data attribute, `data-main`, is set to `js/app/config/MobileInit` (this tells Require.js to look for a MobileInit.js file inside of the config folder).  The combined jQuery Mobile and common CSS file are also included asynchronously.
+   *loadCSS(url, callback)* - Asynchronously includes a CSS file to a page
 
-   _Desktop Browser_
+   *loadJS(file, callback)* - Asynchronously includes a JavaScript file to the page
 
-   If a desktop device is found, then Require.js is included asynchronously within the HTML page, and the Require.js script tag HTML5 data attribute, `data-main`, is set to `js/app/config/DesktopInit` (this tells Require.js to look for a DesktopInit.js file inside of the config folder).  The combined Bootstrap and common CSS file are also included asynchronously.
+   *loadFiles(production, obj, callback)* - Calls the `loadCSS()` and `loadJS()` methods internally to asynchronously include our CSS and JavaScript files 
 
-   **Note**:  You do not need to use the JavaScript mobile detection script for your application to use Backbone.js or Require.js. I just put it in so that you could see an example of how to separate your Mobile and Desktop JavaScript logic.
+   **Note:** Require.js does not officially support [loading CSS files](http://requirejs.org/docs/faq-advanced.html#css), which is why we included the `loadCSS()` method to asynchronously include our CSS files.
 
-   _Production Mode_
+   Loading files asynchronously prevents our application files from blocking the loading of the UI and allows us the flexibilty to load different CSS/JavaScript files if a user is on a mobile/desktop device.
 
-   In production mode, your app's single minified and concatenated JavaScript file is loaded instead.  Your application's minified common CSS file is also included.
+   Since the Desktop/Mobile versions of the boilerplate point Require.js to two different files, including Require.js asynchronously with the `loadJS` method provides the flexibility to do that.
 
-   _Development Mode_
+### Mobile Detection Script
 
-  In development mode, your app's non-minified JavaScript files are loaded using Require.js instead of Almond.js.  Your application's non-minified common CSS file is also included.
+There is a simple JavaScript mobile browser detection script that stores different production/development CSS and JavaScript files within a local `config` object based on whether a user is using a mobile or desktop browser.
 
-   _Loader Methods_
+> You do not need to use the provided JavaScript mobile detection script for your application. We provided it for convenience so that you could see an example of how to separate your Mobile and Desktop JavaScript logic using Require.js.
 
-   You will notice that the CSS files and the Require.js file are being included on the page via the `loadFiles()` method (which uses the `loadCss()` and `loadJS()` methods internally).  Require.js does not officially support [loading CSS files](http://requirejs.org/docs/faq-advanced.html#css), which is why I included the `loadCSS()` method to asynchronously include CSS files.  Loading CSS asynchronously also allows the flexibilty/mechanism to load different CSS files if a user is on a mobile/desktop device.
+### Production Mode
 
-   I included the `loadJS()` method since the Desktop/Mobile versions of the boilerplate point Require.js to two different files.  Including Require.js asynchronously within the `loadJS` method provides the flexibility to do that.
+In production mode, your app's single minified and concatenated JavaScript file is loaded using Almond.js instead of Require.js.  Your application's minfied common CSS file is also included.
 
-   **Note:** Feel free to use the `loadCSS()` and `loadJS()` methods to load any other dependencies your application may have that you do not want to use Require.js for.
+### Development Mode
+
+In development mode, your app's non-minified JavaScript files are loaded using Require.js instead of Almond.js.  Your application's non-minified common CSS file is also included.
+
+Config.js
+---------
+
+This file includes your mobile **AND** desktop Require.js configurations.
+
+If we look at our App's Require.js configurations, we will see the first thing being configured are the module paths.  Setting paths allow you to define an alias name and file path for any module that you like.
+
+Typically, you want to set a path for any module that will be listed as a dependency in more than one other module (eq. jQuery, Backbone).  This saves you some typing, since you just have to list the alias name, and not the entire file path, when listing dependencies.  After all of the file paths are set, you will find the Shim configuration (Added in Require.js 2.0).
+   
+The Shim configuration allows you to easily include non-AMD compatible JavaScript files with Require.js (a separate library such as [Use.js](https://github.com/tbranyen/use.js/) was previously needed for this). This is very important, because Backbone versions > 0.5.3 no longer support AMD (meaning you will get an error if you try to use both Require.js and the latest version of Backbone).  This configuration is a much better solution than manually editing non-AMD compatible JavaScript files to make sure the code is wrapped in a `define` method.  Require.js creator [James Burke](http://tagneto.blogspot.com/) previously maintained AMD compatible forks of both Backbone.js and Underscore.js because of this exact reason.
+
+```js
+   shim: {
+
+      // Backbone
+      "backbone": {
+
+         // Depends on underscore/lodash and jQuery
+         "deps": ["underscore", "jquery"],
+
+         // Exports the global window.Backbone object
+         "exports": "Backbone"
+
+      },
+
+   }
+```
+
+The Shim configuration also takes the place for the old Require.js `order` plugin.  Within the Shim configuration, you can list files and their dependency tree.  An example is jQuery plugins being dependent on jQuery:
+
+```js
+   shim: {
+
+      // Twitter Bootstrap plugins depend on jQuery
+      "bootstrap": ["jquery"]
+
+   }
+```
+
+> You do not need a shim configuration for [jQuery](http://www.jquery.com) or [lodash](https://github.com/bestiejs/lodash) because they do not have any dependencies.
 
 MobileInit.js
 -------------
-   MobileInit.js is only used if a mobile browser is detected.  This file includes your mobile Require.js configurations.
+MobileInit.js is only used if a mobile browser is detected.
 
-   If we look at the mobile Require.js configurations, we will see the first thing being configured are the paths.  Setting paths allow you to define an alias name and file path for any file that you like.
+The `require` method is used to asynchronously include all of the files/dependencies passed into the first parameter (jQuery, Backbone, Lodash, mobileRouter, etc) into the page.
 
-   Typically, you want to set a path for any file that will be listed as a dependency in more than one module (eq. jQuery, Marionette, Backbone).  This saves you some typing, since you just have to list the alias name, and not the entire file path, when listing dependencies.  After all of the file paths are set, you will find the Shim configuration (Added in Require.js 2.0).
-   
+After all of those files are included on the page, two internal jQuery Mobile properties are turned off to allow Backbone.js to handle all of the routing.
 
-   The Shim configuration allows you to easily include non-AMD compatible JavaScript files with Require.js (a separate library such as [Use.js](https://github.com/tbranyen/use.js/) was previously needed for this).  This is very important, because Backbone versions > 0.5.3 no longer support AMD (meaning you will get an error if you try to use both Require.js and the latest version of Backbone).  Marionette as well does not support AMD.  This configuration is a much better solution than manually editing non-AMD compatible JavaScript files to make sure the code is wrapped in a `define` method.  Require.js creator [James Burke](http://tagneto.blogspot.com/) previously maintained AMD compatible forks of both Backbone.js and Underscore.js because of this exact reason.
+```js
+   // Prevents all anchor click handling
+   $.mobile.linkBindingEnabled = false;
 
-        shim:{
-            // jQuery Mobile
-            "jquerymobile":["jquery"],
-            // Backbone
-            "backbone":{
-                // Depends on underscore/lodash and jQuery
-                "deps":["underscore", "jquery"],
-                // Exports the global window.Backbone object
-                "exports":"Backbone"
-            },
-            //Marionette
-            "marionette":{
-                "deps":["underscore", "backbone", "jquery"],
-                "exports":"Marionette"
-            },
-            //Handlebars
-            "handlebars":{
-                "exports":"Handlebars"
-            },
-            // Backbone.validateAll plugin that depends on Backbone
-            "backbone.validateAll":["backbone"]
-        }
+   // Disabling this will prevent jQuery Mobile from handling hash changes
+   $.mobile.hashListeningEnabled = false;
+```
 
-   The Shim configuration also takes the place for the old Require.js `order` plugin.  Within the Shim configuration, you can list files and their dependency tree.  An example is jQuery plugins being dependent on jQuery:
+Finally, a new [Marionette.Application](https://github.com/marionettejs/backbone.marionette/blob/master/docs/marionette.application.md) instance is instantiated to get your Marionette app up and running.
 
-         shim: {
-
-            // Twitter Bootstrap plugins depend on jQuery
-            "bootstrap": ["jquery"]
-
-         }
-
-   **Note**: You do not need a shim configuration for [jQuery](http://www.jquery.com) or [lodash](https://github.com/bestiejs/lodash) because they are both AMD compatible.
-
-   After Require.js is configured, `require` is called.  The `require` method  asynchronously loads its dependencies, including `App.js`.  As we will discuss later, `App.js` actually exports a global variable, `App`.  
-
-   After all of those files are loaded, two internal jQuery Mobile properties are turned off to allow Backbone/Marionette to handle all of the routing.
-
-            // Prevents all anchor click handling
-            $.mobile.linkBindingEnabled = false;
-
-            // Disabling this will prevent jQuery Mobile from handling hash changes
-            $.mobile.hashListeningEnabled = false;
-
-   Then, `App.start( { mobile: true } )` is called, starting our Marionette application and initiating Route handling.
+> You don't need to instantiate a new router instance if you aren't using a Backbone Router class.
 
 DesktopInit.js
 --------------
-   DesktopInit.js is only used if a desktop browser is detected.  This is where your desktop Require.js configurations will be.
+DesktopInit.js is only used if a desktop browser is detected.
 
-   This file is the exact same as MobileInit.js, except it has a few different dependencies (Twitter Bootstrap instead of jQuery Mobile, etc)
+This file is the exact same as MobileInit.js, except it has a few different dependencies (Twitter Bootstrap instead of jQuery Mobile, etc), and instead of loading MobileController to handle the Routes defined in AppRouter, it loads DesktopController to handle these routes.  This is one of many possible ways to handle the necessary differences between Desktop and Mobile devices. There are others, so take it or leave it.
 
 
 App.js
@@ -130,7 +136,7 @@ App.js
 
    It is best practice to list out all of your dependencies for every file, regardless of whether or not they expose global objects and are already included in the page.  This is also especially important for the Require.js optimizer (which needs to determine which files depend on which other files).  
 
-   **Note**: If your dependencies do not expose global objects, then it is absolutely mandatory to list it as a dependency, since Require.js does not allow global variables (meaning your modules are private and cannot be accessed by other modules or code without explicitly listing them as dependencies).
+> If your dependencies do not expose global objects, then it is absolutely mandatory to list it as a dependency, since Require.js does not allow global variables (meaning your modules are private and cannot be accessed by other modules or code without explicitly listing them as dependencies).
 
    [Marionette.Application](https://github.com/marionettejs/backbone.marionette/blob/master/docs/marionette.application.md) is the heart of the Marionette framework.  The [Regions](https://github.com/marionettejs/backbone.marionette/blob/master/docs/marionette.region.md), [Layouts](https://github.com/marionettejs/backbone.marionette/blob/master/docs/marionette.layout.md) and [AppRouters](https://github.com/marionettejs/backbone.marionette/blob/master/docs/marionette.approuter.md) you create are typically hung off of a global instance of `Marionette.Application`.  
 
@@ -152,7 +158,7 @@ AppRouter.js
 Here is a simple example of how a Marionette.Controller and Marionette.AppRouter interact:
         
         var AppRouter = new Backbone.Marionette.AppRouter({
-           //"index" must be a method in AppRouter's controller
+           //"home" must be a method in AppRouter's controller
            appRoutes: {
                "home": "home"
            }, 
@@ -163,7 +169,7 @@ Here is a simple example of how a Marionette.Controller and Marionette.AppRouter
             })
         });
 
-   Here we see that when a URL change event occurs and the URL hash matches `#home`, the `index` method in `AppRouter.controller` will be fired.  In our application, we implement a different Controller for Mobile than for Desktop.  This is just an optional way to handle differences between Mobile and Desktop versions of the application - the same routes will be handled by different controllers depending on the user's device.  There is currently only one appRoute listed in AppRouter.js (which gets called if there is no hash tag on the url), but feel free to create more for your application.
+   Here we see that when a URL change event occurs and the URL hash matches `#home`, the `home` method in `AppRouter.controller` will be fired.  In our application, we implement a different Controller for Mobile than for Desktop.  This is just an optional way to handle differences between Mobile and Desktop versions of the application - the same routes will be handled by different controllers depending on the user's device.  There is currently only one appRoute listed in AppRouter.js (which gets called if there is no hash tag on the url), but feel free to create more for your application.
 
 MobileController.js
 ----------------
@@ -189,40 +195,93 @@ WelcomeView.js
 -----------
    WelcomeView.js will be used by both the mobile and desktop versions of your application.  It starts with a define method that lists all of its dependencies.
 
-   The rest of the file is a simple implementation of Marionette.ItemView, which is itself a derivative of Backbone.View.  The RequireJS `text` plugin is used to load `welcome.html` as a string, which is set as the `template` attribute on our `WelcomeView` class.  
+   The rest of the file is a simple implementation of Marionette.ItemView, which is itself a derivative of Backbone.View.  The [require-handlebars-plugin](https://github.com/SlexAxton/require-handlebars-plugin) (`hbs` for short) is used to load pre-compiled Handlebars views from the templates specified.  This is different than the more common strategy of using the RequireJS `text` plugin to load strings from template files, then compiling them with Handlebars or Underscore.  In the case of `WelcomeView`, we load the template function for our template `welcome.html`, and set it as the `template` attribute on our `WelcomeView` class.  
 
-   Backbone.js View's have a one-to-one relationship with DOM elements, and a View's DOM element is listed in the `el` property, or is created as a simple `div` if none is specified.  The jQuery-wrapped DOM element is then available as `$el`.  The View's `model` is set to a new instance of Model.js, listed above as a dependency.  
+   Backbone.js Views have a one-to-one relationship with DOM elements, and a View's DOM element is listed in the `el` property, or is created as a simple `div` if none is specified.  The jQuery-wrapped DOM element is then available as `$el`.  The View's `model` is set to a new instance of Model.js, listed above as a dependency.  
 
    Marionette.ItemView is an extension of the base Backbone.View, but contains some basic logic for rendering and tearing down the view.  If a View's `template` attribute is set to a template function created by an engine like Handlebars or Underscore, ItemView's `render` method will automatically render the View's `$el` for you.  Of course you are also free to write your own simple `render` method.  Our `DesktopHeaderView` is a good example of the simplest of possible views:
 
-define(['underscore', 'jquery', 'handlebars', 'text!templates/desktopHeader.html'],
-    function (_, $, Handlebars, template) {
+```js
+define(['jquery', 'hbs!template/desktopHeader', 'backbone', 'marionette'],
+    function ($, template, Backbone) {
+        //ItemView provides some default rendering logic
         return Backbone.Marionette.ItemView.extend({
-            template:Handlebars.compile(template)
+            template:template
         });
     });
+```
+   Here we use the `hbs` plugin to load desktopHeader.html in as a pre-compiled Handlebars template function.  If Handlebars isn't your thing and you prefer EJS-style Underscore templating, consider using [require-tpl](https://github.com/ZeeAgency/requirejs-tpl) to accomplish the same thing.  Pre-compiled templates are a big performance boost in production-built applications.
 
-Here we use the `text` plugin to load desktopHeader.html in as a template string, and then compile it into a function with Handlebars.  There are handy plugins out there which condense this step for you.  For Handlebars, consider using the [require-handlebars-plugin](https://github.com/SlexAxton/require-handlebars-plugin).  For Underscore, consider [require-tpl](https://github.com/ZeeAgency/requirejs-tpl).
+   Back to `WelcomeView.js` Next you will find an `events` object.  This is where all of your View DOM event handlers associated with the HTML element referenced by your View's `el` property should be stored.  Keep in mind that Backbone is using the jQuery `delegate` method, so it expects a selector that is within your View's `el` property.  I did not include any events by default, so you will have to fill those in yourself.  Below is an example of having an events object with one event handler that calls a View's `someMethod()` method when an element with a class name of _someElement_ is clicked.
 
-   Next you will find an `events` object.  This is where all of your View DOM event handlers associated with the HTML element referenced by your View's `el` property should be stored.  Keep in mind that Backbone is using the jQuery `delegate` method, so it expects a selector that is within your View's `el` property.  I did not include any events by default, so you will have to fill those in yourself.  Below is an example of having an events object with one event handler that calls a View's `someMethod()` method when an element with a class name of _someElement_ is clicked.
+```js
+// View Event Handlers
+events: {
+   "click .someElement": "someMethod"
+}
+```
 
-            // View Event Handlers
-            events: {
-
-               "click .someElement": "someMethod"
-
-            },
-
-
-   Finally, I am returning the View class.
-
+   Finally, we return the View class.
 
    **Note**: If you have read all of the documentation up until this point, you will most likely have already noticed that [lodash](https://github.com/bestiejs/lodash) is being used instead of Underscore.js.  Apart from having a bit better cross-browser performance and stability than Underscore.js, lodash also provides a custom build process.  Although I have provided a version of lodash that has all of the Underscore.js methods you would expect, you can download a custom build and swap that in.  Also, it doesn't hurt that Lodash creator, [John-David Dalton](https://twitter.com/jdalton), is an absolute performance and API consistency maniac =)
 
-
 welcome.html
 ------------
- This file includes a template that is included via the Require.js [text plugin](https://github.com/requirejs/text).  Templates are typically a useful way for you to update your View (the DOM) if a Model attribute changes.  They are also useful when you have a lot of HTML and JavaScript that you need to fit together, and instead of concatenating HTML strings inside of your JavaScript, templates provide a cleaner solution.  Look at Handlebars' and Underscore's documentation to read more about the respective syntax of these handy templating solutions.
+ This file is a simple example of a Handlebars template.  Templates are a useful way for you to update your View (the DOM) if a Model attribute changes.  They are also useful when you have a lot of HTML and JavaScript that you need to fit together, and instead of concatenating HTML strings inside of your JavaScript, templates provide a cleaner solution.  Look at Handlebars' and Underscore's documentation to read more about the respective syntaxes of these handy templating solutions.
+
+Handlebars helpers with require-handlebars-plug (hbs)
+-------------------
+   In addition to loading pre-compiled template functions, `hbs` also does a couple more interesting things for us.  
+
+   First, any Handlebars helper methods you define in the `template\helpers` folder will automatically get loaded and will be available in your templates.  For instance:
+
+yeller.js
+------------
+   This is an example of a (perfectly useless) Handlebars template method.  It takes a string as input, and appends a bunch of bangs.  
+
+```js
+define(['handlebars'], function ( Handlebars ){
+  function yeller ( context, options ) {
+    // Assume it's a string for simplicity.
+    return context + "!!!!!!!!";
+  }
+
+  Handlebars.registerHelper( 'yeller', yeller );
+  return yeller;
+});
+```
+
+In our `welcome.html`, we see its usage:
+
+```html
+   <p>{{yeller "Marionette is great"}}</p>
+```
+
+i18n
+--------
+
+   hbs also provides support for i18n.  By defining a JSON mapping file in `en_us.json` (for example), we can define a set of labels and messages which can later be translated into other languages.  
+
+en_us.json
+------
+```js
+{
+  "desktop" : "Desktop Computer",
+  "mobile" : "Mobile Device"
+}
+```
+
+   We can then reference these English phrases in our templates like this example from `welcome.html`: 
+
+```html
+   You are viewing this application on
+        {{#if mobile}}
+                <strong>{{$ mobile}}</strong>
+        {{else}}
+                <strong>{{$ desktop}}</strong>
+        {{/if}}.
+```
+
 
 Model.js
 --------
@@ -244,35 +303,32 @@ Collection.js
 
    Finally, a new Collection class is returned.
 
-app.build.js
+Gruntfile.js
 ------------
-   This file is ready made for you to have your entire project optimized using Node.js, the [Require.js Optimizer](https://github.com/jrburke/r.js/) and (optionally) [almond.js](https://github.com/jrburke/almond).
+This file is ready made for you to have your entire project optimized using Grunt.js, the [Require.js Optimizer](https://github.com/jrburke/r.js/) and [almond.js](https://github.com/jrburke/almond).
 
-   Almond.js a lightweight AMD shim library created by [James Burke](https://github.com/jrburke), the creator of Require.js.  Almond is meant for small to medium sized projects that use one concatenated/minified JavaScript file.  If you don't need some of the advanced features that Require.js provides (lazy loading, etc) then Almond.js is great for performance.  
+Grunt.js is a JavaScript command line task runner that allows you to easily automate common development tasks such as code linting, minification, and unit testing.
 
+> Running the Jasmine Tasks with Grunt has not been implemented yet.
 
+Almond.js a lightweight AMD shim library created by [James Burke](https://github.com/jrburke), the creator of Require.js.  Almond is meant for small to medium sized projects that use one concatenated/minified JavaScript file.  If you don't need some of the advanced features that Require.js provides (lazy loading, etc) then Almond.js is great for performance.
 
-**Note**: The Require.js optimizer works by **static* analysis - it looks at your main config file and then peeks in each specified dependency file, noting their dependencies as well until all dependencies have been discovered, and then concatenates them all into an optionally minified output file.  However, in App.js of our application, we **dynamically** load either MobileController.js or DesktopController.js.  That means that in the static analysis, these dependencies are not detected.  If we are using Almond.js, then our build output will error out saying these dependencies are not found, since Almond does not actually perform asynchronous script loading like the full Require.js does.  For this reason, in our project we will not be using Almond at this time.  To make sure that as many dependencies are combined into our build output as possible though, we explicitly add DesktopController and MobileController to our build configuration, like so:
+Marionette-Require-Boilerplate sets you up to use Require.js in development and Almond.js in production.  By default, Marionette-Require-Boilerplate is in _development_ mode, so if you want to try out the production build, read the production instructions below.
 
+**Production Build Instructions**
 
-        //Mobile build config
-        include: ["app/config/MobileInit", "app/controllers/MobileController"]
+Navigate to the root directory of the Marionette-Require-Boilerplate folder and type **grunt** and wait a few seconds for the build to complete.
 
-        //Desktop build config
-        include: ["app/config/DesktopInit", "app/controllers/DesktopController"]
+> If you are on a Windows machine, you will have to type `grunt.cmd`
 
+Once the script has finished, you will see that both _DesktopInit.min.js_ and _MobileInit.min.js_, and the _mobile.min.css_ and _desktop.min.css_ files will be created/updated.
 
-   Marionette-Require-Boilerplate sets you up to use Require.js in both development and production, for the reason stated above.  I hope to find a way to use Almond.js with dynamically loaded dependencies and would welcome any contribution which makes this possible.  
+Next, update the `production` local variable inside of **index.html** to be **true**.
 
-   By default, Marionette-Require-Boilerplate is in _development_ mode, so if you want to try out the production build, read the production instructions below.
+And that's it!  If you have any questions just create in an issue on Github.
 
-   **Production Build Instructions**
+> Note that when running optimized builds, you must define a separate build process for each i18n language supported.  
 
-   Navigate to within the **deploy** folder and then type **node app.build.js** and wait a few seconds.  Once the script has finished, you will see that both _DesktopInit.min.js_ and _MobileInit.min.js_ will be updated.
-
-   Next, update the `loadRequireJS` method calls inside of **index.html** to now point to your minified desktop and mobile init files instead of the non-minified versions.  Look at the index.html file in this [gist](https://gist.github.com/3752005) for the correct _production_ setup.
-
-   And that's it!  If you have any questions just create in an issue on Github.
 
 SpecRunner.html
 ---------------
@@ -299,15 +355,7 @@ spec.js
 
 **What Require.js plugins are you using?**
 
-   -Just the Require.js text plugin, since it provides an easy way to keep templates in their own folders (instead of just embedding them in your html files).  I was previously using Use.js to load non-AMD compatible scripts, but Require.js 2.0 now provides this functionality.
-
-**Why are you not using the Require.js Internationalization plugin?**
-
-   -I found that when I built using the Require.js Optimizer, only one lang-locale could be included per optimized file.  That would mean, that if you had to support 10 different langs/locales, you would need 20 different optimized builds (Desktop and Mobile).  If I am mistaken about this, please let me know, and I will update the Boilerplate with the Internationalization plugin.  A solution for including localized text is in the roadmap and will be included in a future release of the project.
-
-**You're not using Grunt for your build process?  Are you some sort of newb?**
-
-   -No, but I am still debating whether or not I will include Grunt for this project.
+   - The require-handlebars-plugin `hbs` plugin.  As described above, it provides an easy way to load pre-compiled templates as AMD modules from static html template files.  I was previously using the RequireJS text plugin to load template strings in to each View and compiling them there, but hbs allows me to load these templates pre-compiled, simplifying my code and improving performance.  It also brings support for Handlebars helper methods as well as i18n internationalization, as described before.
 
 **Do I have to use everything the boilerplate gives me?**
 
@@ -325,17 +373,28 @@ spec.js
 
 ##Change Log
 
-`0.1.0` - January 21, 2012
+`0.3.0` - May 19, 2013
 
-Cloned project based off of [Greg Franko](https://github.com/gfranko)'s [Backbone-Require-Boilerplate](https://github.com/gfranko/Backbone-Require-Boilerplate) project.  
+- Resolved circular dependency issue, added almond
+- Added require-handlebars-plugin to load pre-compiled templates
 
-Added Marionette and Handlebars
+`0.2.0` - May 15, 2013
+
+- Updated project with changes from BRB 1.5.0 
+- single `config.js` file
+- Grunt build
+
+`0.1.0` - January 21, 2013
+
+- Cloned project based off of [Greg Franko](https://github.com/gfranko)'s [Backbone-Require-Boilerplate](https://github.com/gfranko/Backbone-Require-Boilerplate) project.  
+
+- Added Marionette and Handlebars
 
 ##Contributors
 [Brett Jones](https://github.com/brettjonesdev), [Greg Franko](https://github.com/gfranko), [Nick Pack](https://github.com/nickpack)
 
 ## License
-Copyright (c) 2012 Brett Jones, Greg Franko  
+Copyright (c) 2013 Brett Jones, Greg Franko  
 Licensed under the MIT license.		
 
 
