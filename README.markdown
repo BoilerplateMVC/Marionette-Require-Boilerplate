@@ -357,6 +357,26 @@ spec.js
 
    - The require-handlebars-plugin `hbs` plugin.  As described above, it provides an easy way to load pre-compiled templates as AMD modules from static html template files.  I was previously using the RequireJS text plugin to load template strings in to each View and compiling them there, but hbs allows me to load these templates pre-compiled, simplifying my code and improving performance.  It also brings support for Handlebars helper methods as well as i18n internationalization, as described before.
 
+
+**Why are you using Grunt for the build?**
+
+   - Grunt comes jam packed with features and plugins to help improve project automation tasks.  Although the main job of Grunt (within Backbone-Require-Boilerplate) is to run the Require.js optimizer, it is also for other tasks such as JSHinting your code.
+
+**What Grunt plugins are you using?**
+
+   - The boilerplate uses the **grunt-contrib-requirejs** plugin to run the Require.js optimizer and the **grunt-contrib-jshint** plugin to automate JSHint code quality checking.  Both plugins are maintained by the core Grunt team.
+
+**What Grunt tasks can I use?**
+
+   - The boilerplate provides `test`, `build`, and `default` tasks.
+
+   - The `test` task will only JSHint your code for quality.  You can run the `test` task by typing `grunt test`.
+
+   - The `build` task will concatenate and minify your Desktop/Mobile JavaScript and CSS files using the Require.js optimizer.  You can run the `build` task by typing `grunt build`.
+
+   - The `default` task will run both the `test` and `build` tasks.  You can run the `default` task by typing `grunt`.
+   
+
 **Do I have to use everything the boilerplate gives me?**
 
    -No!  Feel free to update the boilerplate to fit the needs of your application.  Certain things that you might not want/need include templates, mobile and desktop versions, jQuery Mobile, etc.
