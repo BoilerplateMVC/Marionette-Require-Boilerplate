@@ -31,12 +31,12 @@ module.exports = function(grunt) {
 
                     locale: "en_us",
 
-                    // default plugin settings, listing here just as a reference
                     hbs : {
-                        templateExtension : 'html',
-                        // if disableI18n is `true` it won't load locales and the i18n helper
-                        // won't work as well.
-                        disableI18n : false
+                        templateExtension: "html",
+                        helperDirectory: "templates/helpers/",
+                        i18nDirectory: "templates/i18n/",
+
+                        compileOptions: {}        // options object which is passed to Handlebars compiler
                     }
                 }
             },

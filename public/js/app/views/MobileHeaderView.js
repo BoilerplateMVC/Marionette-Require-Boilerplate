@@ -1,4 +1,4 @@
-define(['backbone', 'marionette', 'jquery', 'jquerymobile', 'hbs!template/mobileHeader'],
+define(['backbone', 'marionette', 'jquery', 'jquerymobile', 'hbs!templates/mobileHeader'],
     function (Backbone, Marionette, $, jqm, template) {
         return Backbone.Marionette.ItemView.extend({
             template: template,

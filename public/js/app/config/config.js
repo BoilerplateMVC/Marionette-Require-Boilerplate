@@ -61,24 +61,11 @@ require.config({
             "exports": "jasmine"
         }
     },
-    // hbs config
+    // hbs config - must duplicate in Gruntfile.js Require build
     hbs: {
-        disableI18n: false,        // This disables the i18n helper and
-        // doesn't require the json i18n files (e.g. en_us.json)
-        // (false by default)
-
-        disableHelpers: false,     // When true, won't look for and try to automatically load
-        // helpers (false by default)
-
-        /*
-         helperPathCallback:       // Callback to determine the path to look for helpers
-         function (name) {       // ('/template/helpers/'+name by default)
-         return 'cs!' + name;
-         },
-         */
-
-        templateExtension: "html", // Set the extension automatically appended to templates
-        // ('hbs' by default)
+        templateExtension: "html",
+        helperDirectory: "templates/helpers/",
+        i18nDirectory: "templates/i18n/",
 
         compileOptions: {}        // options object which is passed to Handlebars compiler
     }
