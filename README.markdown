@@ -36,11 +36,11 @@ As you continue down the page to the first `<script>` tag, you will notice there
 
 To load our production/development CSS and JavaScript files, you can use the handy BoilerplateMVC helper methods included directly in our HTML page.  Below are the available helper methods:
 
-   *loadCSS(url, callback)* - Asynchronously includes a CSS file to a page
+   `loadCSS(url, callback)` - Asynchronously includes a CSS file to a page
 
-   *loadJS(file, callback)* - Asynchronously includes a JavaScript file to the page
+   `loadJS(file, callback)` - Asynchronously includes a JavaScript file to the page
 
-   *loadFiles(production, obj, callback)* - Calls the `loadCSS()` and `loadJS()` methods internally to asynchronously include our CSS and JavaScript files 
+   `loadFiles(production, obj, callback)` - Calls the `loadCSS()` and `loadJS()` methods internally to asynchronously include our CSS and JavaScript files 
 
    **Note:** Require.js does not officially support [loading CSS files](http://requirejs.org/docs/faq-advanced.html#css), which is why we included the `loadCSS()` method to asynchronously include our CSS files.
 
