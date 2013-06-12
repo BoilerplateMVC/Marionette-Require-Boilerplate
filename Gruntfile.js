@@ -7,7 +7,7 @@ module.exports = function(grunt) {
                 options: {
                     baseUrl: "public/js/app",
                     wrap: true,
-                    // Cannot use almond since it does not currently appear to support requireJS's config-map
+                    // Don't use almond if your project needs to load modules dynamically
                     name: "../libs/almond",
                     preserveLicenseComments: false,
                     optimize: "uglify",
@@ -31,12 +31,13 @@ module.exports = function(grunt) {
 
                     locale: "en_us",
 
+                    // options object which is passed to Handlebars compiler
                     hbs : {
                         templateExtension: "html",
                         helperDirectory: "templates/helpers/",
                         i18nDirectory: "templates/i18n/",
 
-                        compileOptions: {}        // options object which is passed to Handlebars compiler
+                        compileOptions: {}
                     }
                 }
             },
