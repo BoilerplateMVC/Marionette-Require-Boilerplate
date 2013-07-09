@@ -1,9 +1,9 @@
 // Jasmine Unit Testing Suite
-define(["jquery", "backbone", "marionette", "models/Model", "collections/Collection", "views/WelcomeView","views/DesktopHeaderView","views/MobileHeaderView","jqueryui", "jquerymobile", "bootstrap", "backbone.validateAll", "jasminejquery"],
+define(["jquery", "backbone", "marionette", "models/Model", "collections/Collection", "views/WelcomeView","views/DesktopHeaderView","views/MobileHeaderView"],
     function($, Backbone, Marionette, Model, Collection, WelcomeView, DesktopHeaderView, MobileHeaderView) {
         // Test suite that includes all of the Jasmine unit tests
         describe("Marionette-Require-Boilerplate (MRB)", function() {
-            /*// Backbone View Suite: contains all tests related to views
+            /*// Marionette App Suite: contains all tests related to views
             describe("Desktop Marionette App instantiation", function() {
                 //Initialize App in Desktop Mode (App is global var)
                 App.start();
@@ -12,8 +12,9 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
                     expect(App.headerRegion.el).toEqual("header");
                 });
 
-            }); // End of the View test suite*/
+            }); // End of the App test suite*/
 
+            // Marionette View Suite: contains all tests related to views
             describe("Marionette Views", function() {
                 it("Instantiate some Views", function() {
                     var container = $("#container");
@@ -26,7 +27,8 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
                     var mobileHeaderView = new MobileHeaderView();
                     container.append(mobileHeaderView.render().$el);
                 });
-            });
+            }); // End of the View test suite*/
+
             // Backbone Model Suite: contains all tests related to models
             describe("Backbone models", function() {
 
@@ -63,6 +65,6 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
                 });
 
             }); // End of the Collection test suite
-        }); // End of the BRB test suite
+        }); // End of the MRB test suite
 
 });
