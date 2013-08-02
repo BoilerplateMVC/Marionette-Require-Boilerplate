@@ -46,7 +46,7 @@ define(["jquery", "backbone", "marionette", "models/Model", "collections/Collect
                 });
 
                 it("should call the validate method when setting a property", function() {
-                    this.model.set({ example: "test" });
+                    this.model.set({ example: "test" }, { validate: true });
                     expect(Model.prototype.validate).toHaveBeenCalled();
                 });
 
