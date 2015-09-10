@@ -1,2 +1,5 @@
+/* desktop.css */
 @import url("bootstrap.css");
 @import url("commonstyles.css");
+@import url("bootstrap-theme.css");
+@import url("docs.css");
