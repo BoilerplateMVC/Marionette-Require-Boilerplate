@@ -1,6 +1,6 @@
 Marionette-Require-Boilerplate (MRB)
 ==================================
-![Example](http://sidnet.info/sites/default/files/marionette-logo.png)   ![Example](http://3.bp.blogspot.com/-JFOJ-k6tLnA/TsiKgBYPvqI/AAAAAAAAAT8/dGXeu0LeuTE/s320/backbone-js-logo.png) ![Example](http://requirejs.org/i/logo.png)
+![Example](http://www.sidnet.info/sites/default/files/marionette-logo.png)   ![Example](http://3.bp.blogspot.com/-JFOJ-k6tLnA/TsiKgBYPvqI/AAAAAAAAAT8/dGXeu0LeuTE/s320/backbone-js-logo.png) ![Example](http://requirejs.org/i/logo.png)
 
 
 #Description
@@ -71,7 +71,7 @@ If we look at our App's Require.js configurations, we will see the first thing b
 
 Typically, you want to set a path for any module that will be listed as a dependency in more than one other module (eq. jQuery, Backbone).  This saves you some typing, since you just have to list the alias name, and not the entire file path, when listing dependencies.  After all of the file paths are set, you will find the Shim configuration (Added in Require.js 2.0).
    
-The Shim configuration allows you to easily include non-AMD compatible JavaScript files with Require.js (a separate library such as [Use.js](https://github.com/tbranyen/use.js/) was previously needed for this). This is very important, because Backbone versions > 0.5.3 no longer support AMD (meaning you will get an error if you try to use both Require.js and the latest version of Backbone).  This configuration is a much better solution than manually editing non-AMD compatible JavaScript files to make sure the code is wrapped in a `define` method.  Require.js creator [James Burke](http://tagneto.blogspot.com/) previously maintained AMD compatible forks of both Backbone.js and Underscore.js because of this exact reason.
+The Shim configuration allows you to easily include non-AMD compatible JavaScript files with Require.js (a separate library such as [Use.js](https://github.com/tbranyen/use-amd) was previously needed for this). This is very important, because Backbone versions > 0.5.3 no longer support AMD (meaning you will get an error if you try to use both Require.js and the latest version of Backbone).  This configuration is a much better solution than manually editing non-AMD compatible JavaScript files to make sure the code is wrapped in a `define` method.  Require.js creator [James Burke](http://tagneto.blogspot.com/) previously maintained AMD compatible forks of both Backbone.js and Underscore.js because of this exact reason.
 
 ```js
    shim: {
@@ -101,7 +101,7 @@ The Shim configuration also takes the place for the old Require.js `order` plugi
    }
 ```
 
-> You do not need a shim configuration for [jQuery](http://www.jquery.com) or [lodash](https://github.com/bestiejs/lodash) because they do not have any dependencies.
+> You do not need a shim configuration for [jQuery](http://jquery.com/) or [lodash](https://github.com/lodash/lodash) because they do not have any dependencies.
 
 MobileInit.js
 -------------
@@ -210,7 +210,7 @@ define(['jquery', 'hbs!template/desktopHeader', 'backbone', 'marionette'],
         });
     });
 ```
-   Here we use the `hbs` plugin to load desktopHeader.html in as a pre-compiled Handlebars template function.  If Handlebars isn't your thing and you prefer EJS-style Underscore templating, consider using [require-tpl](https://github.com/ZeeAgency/requirejs-tpl) to accomplish the same thing.  Pre-compiled templates are a big performance boost in production-built applications.
+   Here we use the `hbs` plugin to load desktopHeader.html in as a pre-compiled Handlebars template function.  If Handlebars isn't your thing and you prefer EJS-style Underscore templating, consider using [require-tpl](https://github.com/JulienCabanes/requirejs-tpl) to accomplish the same thing.  Pre-compiled templates are a big performance boost in production-built applications.
 
    Back to `WelcomeView.js` Next you will find an `events` object.  This is where all of your View DOM event handlers associated with the HTML element referenced by your View's `el` property should be stored.  Keep in mind that Backbone is using the jQuery `delegate` method, so it expects a selector that is within your View's `el` property.  I did not include any events by default, so you will have to fill those in yourself.  Below is an example of having an events object with one event handler that calls a View's `someMethod()` method when an element with a class name of _someElement_ is clicked.
 
@@ -223,7 +223,7 @@ events: {
 
    Finally, we return the View class.
 
-   **Note**: If you have read all of the documentation up until this point, you will most likely have already noticed that [lodash](https://github.com/bestiejs/lodash) is being used instead of Underscore.js.  Apart from having a bit better cross-browser performance and stability than Underscore.js, lodash also provides a custom build process.  Although I have provided a version of lodash that has all of the Underscore.js methods you would expect, you can download a custom build and swap that in.  Also, it doesn't hurt that Lodash creator, [John-David Dalton](https://twitter.com/jdalton), is an absolute performance and API consistency maniac =)
+   **Note**: If you have read all of the documentation up until this point, you will most likely have already noticed that [lodash](https://github.com/lodash/lodash) is being used instead of Underscore.js.  Apart from having a bit better cross-browser performance and stability than Underscore.js, lodash also provides a custom build process.  Although I have provided a version of lodash that has all of the Underscore.js methods you would expect, you can download a custom build and swap that in.  Also, it doesn't hurt that Lodash creator, [John-David Dalton](https://twitter.com/jdalton), is an absolute performance and API consistency maniac =)
 
 welcome.html
 ------------
