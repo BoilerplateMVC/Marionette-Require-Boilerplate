@@ -25,19 +25,17 @@ module.exports = function(grunt) {
                         excludeHbsParser : true,
                         // kills the entire plugin set once it's built.
                         excludeHbs: true,
-                        // removes i18n precompiler, handlebars and json2
+                        // removes handlebars and json2
                         excludeAfterBuild: true
                     },
 
-                    locale: "en_us",
-
                     // options object which is passed to Handlebars compiler
                     hbs : {
+                        helpers:true,
                         templateExtension: "html",
                         helperDirectory: "templates/helpers/",
-                        i18nDirectory: "templates/i18n/",
-
-                        compileOptions: {}
+                        compileOptions: {}        // options object which is passed to Handlebars compiler
+    
                     }
                 }
             },
@@ -51,13 +49,16 @@ module.exports = function(grunt) {
             desktopJS: {
                 options: {
                     baseUrl: "public/js/app",
+                    paths: {
+                        'desktop': 'init/DesktopInit'
+                    },
                     wrap: true,
-                    // Cannot use almond since it does not currently appear to support requireJS's config-map
+                    
                     name: "../libs/almond",
                     preserveLicenseComments: false,
                     optimize: "uglify",
                     mainConfigFile: "public/js/app/config/config.js",
-                    include: ["init/DesktopInit"],
+                    include: ["desktop"],
                     out: "public/js/app/init/DesktopInit.min.js"
                 }
             },

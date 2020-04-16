@@ -1,5 +1,5 @@
 /**
- * @license r.js 2.1.2 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
+ * @license r.js 2.1.11 Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -14,19 +14,20 @@
 /*jslint evil: true, nomen: true, sloppy: true */
 /*global readFile: true, process: false, Packages: false, print: false,
 console: false, java: false, module: false, requirejsVars, navigator,
-document, importScripts, self, location */
+document, importScripts, self, location, Components, FileUtils */
 
-var requirejs, require, define;
+var requirejs, require, define, xpcUtil;
 (function (console, args, readFileFunc) {
-
     var fileName, env, fs, vm, path, exec, rhinoContext, dir, nodeRequire,
-        nodeDefine, exists, reqMain, loadedOptimizedLib, existsForNode,
-        version = '2.1.2',
+        nodeDefine, exists, reqMain, loadedOptimizedLib, existsForNode, Cc, Ci,
+        version = '2.1.11',
         jsSuffixRegExp = /\.js$/,
         commandOption = '',
         useLibLoaded = {},
         //Used by jslib/rhino/args.js
         rhinoArgs = args,
+        //Used by jslib/xpconnect/args.js
+        xpconnectArgs = args,
         readFile = typeof readFileFunc !== 'undefined' ? readFileFunc : null;
 
     function showHelp() {
@@ -41,11 +42,11 @@ var requirejs, require, define;
             return fs.readFileSync(path, 'utf8');
         };
 
-        exec = function (string, name) {
+        exec = function (string) {
             return eval(string);
         };
 
-        exists = function (fileName) {
+        exists = function () {
             console.log('x.js exists not applicable in browser env');
             return false;
         };
@@ -80,7 +81,7 @@ var requirejs, require, define;
                 }
             };
         }
-    } else if (typeof process !== 'undefined') {
+    } else if (typeof process !== 'undefined' && process.versions && !!process.versions.node) {
         env = 'node';
 
         //Get the fs module via Node's require before it
@@ -120,23 +121,137 @@ var requirejs, require, define;
             commandOption = fileName.substring(1);
             fileName = process.argv[3];
         }
+    } else if (typeof Components !== 'undefined' && Components.classes && Components.interfaces) {
+        env = 'xpconnect';
+
+        Components.utils['import']('resource://gre/modules/FileUtils.jsm');
+        Cc = Components.classes;
+        Ci = Components.interfaces;
+
+        fileName = args[0];
+
+        if (fileName && fileName.indexOf('-') === 0) {
+            commandOption = fileName.substring(1);
+            fileName = args[1];
+        }
+
+        xpcUtil = {
+            isWindows: ('@mozilla.org/windows-registry-key;1' in Cc),
+            cwd: function () {
+                return FileUtils.getFile("CurWorkD", []).path;
+            },
+
+            //Remove . and .. from paths, normalize on front slashes
+            normalize: function (path) {
+                //There has to be an easier way to do this.
+                var i, part, ary,
+                    firstChar = path.charAt(0);
+
+                if (firstChar !== '/' &&
+                        firstChar !== '\\' &&
+                        path.indexOf(':') === -1) {
+                    //A relative path. Use the current working directory.
+                    path = xpcUtil.cwd() + '/' + path;
+                }
+
+                ary = path.replace(/\\/g, '/').split('/');
+
+                for (i = 0; i < ary.length; i += 1) {
+                    part = ary[i];
+                    if (part === '.') {
+                        ary.splice(i, 1);
+                        i -= 1;
+                    } else if (part === '..') {
+                        ary.splice(i - 1, 2);
+                        i -= 2;
+                    }
+                }
+                return ary.join('/');
+            },
+
+            xpfile: function (path) {
+                var fullPath;
+                try {
+                    fullPath = xpcUtil.normalize(path);
+                    if (xpcUtil.isWindows) {
+                        fullPath = fullPath.replace(/\//g, '\\');
+                    }
+                    return new FileUtils.File(fullPath);
+                } catch (e) {
+                    throw new Error((fullPath || path) + ' failed: ' + e);
+                }
+            },
+
+            readFile: function (/*String*/path, /*String?*/encoding) {
+                //A file read function that can deal with BOMs
+                encoding = encoding || "utf-8";
+
+                var inStream, convertStream,
+                    readData = {},
+                    fileObj = xpcUtil.xpfile(path);
+
+                //XPCOM, you so crazy
+                try {
+                    inStream = Cc['@mozilla.org/network/file-input-stream;1']
+                               .createInstance(Ci.nsIFileInputStream);
+                    inStream.init(fileObj, 1, 0, false);
+
+                    convertStream = Cc['@mozilla.org/intl/converter-input-stream;1']
+                                    .createInstance(Ci.nsIConverterInputStream);
+                    convertStream.init(inStream, encoding, inStream.available(),
+                    Ci.nsIConverterInputStream.DEFAULT_REPLACEMENT_CHARACTER);
+
+                    convertStream.readString(inStream.available(), readData);
+                    return readData.value;
+                } catch (e) {
+                    throw new Error((fileObj && fileObj.path || '') + ': ' + e);
+                } finally {
+                    if (convertStream) {
+                        convertStream.close();
+                    }
+                    if (inStream) {
+                        inStream.close();
+                    }
+                }
+            }
+        };
+
+        readFile = xpcUtil.readFile;
+
+        exec = function (string) {
+            return eval(string);
+        };
+
+        exists = function (fileName) {
+            return xpcUtil.xpfile(fileName).exists();
+        };
+
+        //Define a console.log for easier logging. Don't
+        //get fancy though.
+        if (typeof console === 'undefined') {
+            console = {
+                log: function () {
+                    print.apply(undefined, arguments);
+                }
+            };
+        }
     }
 
     /** vim: et:ts=4:sw=4:sts=4
- * @license RequireJS 2.1.2 Copyright (c) 2010-2012, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS 2.1.11 Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
 //Not using strict: uneven strict support in browsers, #392, and causes
 //problems with requirejs.exec()/transpiler plugins that may not be strict.
 /*jslint regexp: true, nomen: true, sloppy: true */
-/*global window, navigator, document, importScripts, jQuery, setTimeout, opera */
+/*global window, navigator, document, importScripts, setTimeout, opera */
 
 
 (function (global) {
     var req, s, head, baseElement, dataMain, src,
         interactiveScript, currentlyAddingScript, mainScript, subPath,
-        version = '2.1.2',
+        version = '2.1.11',
         commentRegExp = /(\/\*([\s\S]*?)\*\/|([^:]|^)\/\/(.*)$)/mg,
         cjsRequireRegExp = /[^.]\s*require\s*\(\s*["']([^'"\s]+)["']\s*\)/g,
         jsSuffixRegExp = /\.js$/,
@@ -145,9 +260,8 @@ var requirejs, require, define;
         ostring = op.toString,
         hasOwn = op.hasOwnProperty,
         ap = Array.prototype,
-        aps = ap.slice,
         apsp = ap.splice,
-        isBrowser = !!(typeof window !== 'undefined' && navigator && document),
+        isBrowser = !!(typeof window !== 'undefined' && typeof navigator !== 'undefined' && window.document),
         isWebWorker = !isBrowser && typeof importScripts !== 'undefined',
         //PS3 indicates loaded and complete, but need to wait for complete
         //specifically. Sequence is 'loading', 'loaded', execution,
@@ -233,7 +347,10 @@ var requirejs, require, define;
         if (source) {
             eachProp(source, function (value, prop) {
                 if (force || !hasProp(target, prop)) {
-                    if (deepStringMixin && typeof value !== 'string') {
+                    if (deepStringMixin && typeof value === 'object' && value &&
+                        !isArray(value) && !isFunction(value) &&
+                        !(value instanceof RegExp)) {
+
                         if (!target[prop]) {
                             target[prop] = {};
                         }
@@ -259,7 +376,11 @@ var requirejs, require, define;
         return document.getElementsByTagName('script');
     }
 
-    //Allow getting a global that expressed in
+    function defaultOnError(err) {
+        throw err;
+    }
+
+    //Allow getting a global that is expressed in
     //dot notation, like 'a.b.c'.
     function getGlobal(value) {
         if (!value) {
@@ -316,19 +437,27 @@ var requirejs, require, define;
         var inCheckLoaded, Module, context, handlers,
             checkLoadedTimeoutId,
             config = {
+                //Defaults. Do not set a default for map
+                //config to speed up normalize(), which
+                //will run faster if there is no default.
                 waitSeconds: 7,
                 baseUrl: './',
                 paths: {},
+                bundles: {},
                 pkgs: {},
                 shim: {},
-                map: {},
                 config: {}
             },
             registry = {},
+            //registry of just enabled modules, to speed
+            //cycle breaking code when lots of modules
+            //are registered, but not activated.
+            enabledRegistry = {},
             undefEvents = {},
             defQueue = [],
             defined = {},
             urlFetched = {},
+            bundlesMap = {},
             requireCounter = 1,
             unnormalizedCounter = 1;
 
@@ -342,8 +471,8 @@ var requirejs, require, define;
          * @param {Array} ary the array of path segments.
          */
         function trimDots(ary) {
-            var i, part;
-            for (i = 0; ary[i]; i += 1) {
+            var i, part, length = ary.length;
+            for (i = 0; i < length; i++) {
                 part = ary[i];
                 if (part === '.') {
                     ary.splice(i, 1);
@@ -376,7 +505,7 @@ var requirejs, require, define;
          * @returns {String} normalized name
          */
         function normalize(name, baseName, applyMap) {
-            var pkgName, pkgConfig, mapValue, nameParts, i, j, nameSegment,
+            var pkgMain, mapValue, nameParts, i, j, nameSegment, lastIndex,
                 foundMap, foundI, foundStarMap, starI,
                 baseParts = baseName && baseName.split('/'),
                 normalizedBaseParts = baseParts,
@@ -389,29 +518,26 @@ var requirejs, require, define;
                 //otherwise, assume it is a top-level require that will
                 //be relative to baseUrl in the end.
                 if (baseName) {
-                    if (getOwn(config.pkgs, baseName)) {
-                        //If the baseName is a package name, then just treat it as one
-                        //name to concat the name with.
-                        normalizedBaseParts = baseParts = [baseName];
-                    } else {
-                        //Convert baseName to array, and lop off the last part,
-                        //so that . matches that 'directory' and not name of the baseName's
-                        //module. For instance, baseName of 'one/two/three', maps to
-                        //'one/two/three.js', but we want the directory, 'one/two' for
-                        //this normalization.
-                        normalizedBaseParts = baseParts.slice(0, baseParts.length - 1);
+                    //Convert baseName to array, and lop off the last part,
+                    //so that . matches that 'directory' and not name of the baseName's
+                    //module. For instance, baseName of 'one/two/three', maps to
+                    //'one/two/three.js', but we want the directory, 'one/two' for
+                    //this normalization.
+                    normalizedBaseParts = baseParts.slice(0, baseParts.length - 1);
+                    name = name.split('/');
+                    lastIndex = name.length - 1;
+
+                    // If wanting node ID compatibility, strip .js from end
+                    // of IDs. Have to do this here, and not in nameToUrl
+                    // because node allows either .js or non .js to map
+                    // to same file.
+                    if (config.nodeIdCompat && jsSuffixRegExp.test(name[lastIndex])) {
+                        name[lastIndex] = name[lastIndex].replace(jsSuffixRegExp, '');
                     }
 
-                    name = normalizedBaseParts.concat(name.split('/'));
+                    name = normalizedBaseParts.concat(name);
                     trimDots(name);
-
-                    //Some use of packages may use a . path to reference the
-                    //'main' module name, so normalize for that.
-                    pkgConfig = getOwn(config.pkgs, (pkgName = name[0]));
                     name = name.join('/');
-                    if (pkgConfig && name === pkgName + '/' + pkgConfig.main) {
-                        name = pkgName;
-                    }
                 } else if (name.indexOf('./') === 0) {
                     // No baseName, so this is ID is resolved relative
                     // to baseUrl, pull off the leading dot.
@@ -420,10 +546,10 @@ var requirejs, require, define;
             }
 
             //Apply map config if available.
-            if (applyMap && (baseParts || starMap) && map) {
+            if (applyMap && map && (baseParts || starMap)) {
                 nameParts = name.split('/');
 
-                for (i = nameParts.length; i > 0; i -= 1) {
+                outerLoop: for (i = nameParts.length; i > 0; i -= 1) {
                     nameSegment = nameParts.slice(0, i).join('/');
 
                     if (baseParts) {
@@ -440,14 +566,10 @@ var requirejs, require, define;
                                     //Match, update name to the new value.
                                     foundMap = mapValue;
                                     foundI = i;
-                                    break;
+                                    break outerLoop;
                                 }
                             }
                         }
-                    }
-
-                    if (foundMap) {
-                        break;
                     }
 
                     //Check for a star map match, but just hold on to it,
@@ -470,7 +592,11 @@ var requirejs, require, define;
                 }
             }
 
-            return name;
+            // If the name points to a package's name, use
+            // the package main instead.
+            pkgMain = getOwn(config.pkgs, name);
+
+            return pkgMain ? pkgMain : name;
         }
 
         function removeScript(name) {
@@ -488,7 +614,6 @@ var requirejs, require, define;
         function hasPathFallback(id) {
             var pathConfig = getOwn(config.paths, id);
             if (pathConfig && isArray(pathConfig) && pathConfig.length > 1) {
-                removeScript(id);
                 //Pop off the first array value, since it failed, and
                 //retry
                 pathConfig.shift();
@@ -619,7 +744,12 @@ var requirejs, require, define;
                     fn(defined[id]);
                 }
             } else {
-                getModule(depMap).on(name, fn);
+                mod = getModule(depMap);
+                if (mod.error && name === 'error') {
+                    fn(mod.error);
+                } else {
+                    mod.on(name, fn);
+                }
             }
         }
 
@@ -659,7 +789,7 @@ var requirejs, require, define;
                 //local var ref to defQueue, so cannot just reassign the one
                 //on context.
                 apsp.apply(defQueue,
-                           [defQueue.length - 1, 0].concat(globalDefQueue));
+                           [defQueue.length, 0].concat(globalDefQueue));
                 globalDefQueue = [];
             }
         }
@@ -676,7 +806,7 @@ var requirejs, require, define;
                 mod.usingExports = true;
                 if (mod.map.isDefine) {
                     if (mod.exports) {
-                        return mod.exports;
+                        return (defined[mod.map.id] = mod.exports);
                     } else {
                         return (mod.exports = defined[mod.map.id] = {});
                     }
@@ -690,9 +820,9 @@ var requirejs, require, define;
                         id: mod.map.id,
                         uri: mod.map.url,
                         config: function () {
-                            return (config.config && getOwn(config.config, mod.map.id)) || {};
+                            return  getOwn(config.config, mod.map.id) || {};
                         },
-                        exports: defined[mod.map.id]
+                        exports: mod.exports || (mod.exports = {})
                     });
                 }
             }
@@ -701,6 +831,7 @@ var requirejs, require, define;
         function cleanRegistry(id) {
             //Clean up machinery used for waiting modules.
             delete registry[id];
+            delete enabledRegistry[id];
         }
 
         function breakCycle(mod, traced, processed) {
@@ -732,7 +863,7 @@ var requirejs, require, define;
         }
 
         function checkLoaded() {
-            var map, modId, err, usingPathFallback,
+            var err, usingPathFallback,
                 waitInterval = config.waitSeconds * 1000,
                 //It is possible to disable the wait interval by using waitSeconds of 0.
                 expired = waitInterval && (context.startTime + waitInterval) < new Date().getTime(),
@@ -749,9 +880,9 @@ var requirejs, require, define;
             inCheckLoaded = true;
 
             //Figure out the state of all the modules.
-            eachProp(registry, function (mod) {
-                map = mod.map;
-                modId = map.id;
+            eachProp(enabledRegistry, function (mod) {
+                var map = mod.map,
+                    modId = map.id;
 
                 //Skip things that are not enabled or in error state.
                 if (!mod.enabled) {
@@ -930,7 +1061,7 @@ var requirejs, require, define;
             },
 
             /**
-             * Checks is the module is ready to define itself, and if so,
+             * Checks if the module is ready to define itself, and if so,
              * define it.
              */
             check: function () {
@@ -958,8 +1089,13 @@ var requirejs, require, define;
                     if (this.depCount < 1 && !this.defined) {
                         if (isFunction(factory)) {
                             //If there is an error listener, favor passing
-                            //to that instead of throwing an error.
-                            if (this.events.error) {
+                            //to that instead of throwing an error. However,
+                            //only do it for define()'d  modules. require
+                            //errbacks should not be called for failures in
+                            //their callbacks (#699). However if a global
+                            //onError is set, use that.
+                            if ((this.events.error && this.map.isDefine) ||
+                                req.onError !== defaultOnError) {
                                 try {
                                     exports = context.execCb(id, factory, depExports, exports);
                                 } catch (e) {
@@ -969,17 +1105,14 @@ var requirejs, require, define;
                                 exports = context.execCb(id, factory, depExports, exports);
                             }
 
-                            if (this.map.isDefine) {
-                                //If setting exports via 'module' is in play,
-                                //favor that over return value and exports. After that,
-                                //favor a non-undefined return value over exports use.
+                            // Favor return value over exports. If node/cjs in play,
+                            // then will not have a return value anyway. Favor
+                            // module.exports assignment over exports object.
+                            if (this.map.isDefine && exports === undefined) {
                                 cjsModule = this.module;
-                                if (cjsModule &&
-                                        cjsModule.exports !== undefined &&
-                                        //Make sure it is not already the exports value
-                                        cjsModule.exports !== this.exports) {
+                                if (cjsModule) {
                                     exports = cjsModule.exports;
-                                } else if (exports === undefined && this.usingExports) {
+                                } else if (this.usingExports) {
                                     //exports already set the defined value.
                                     exports = this.exports;
                                 }
@@ -987,8 +1120,8 @@ var requirejs, require, define;
 
                             if (err) {
                                 err.requireMap = this.map;
-                                err.requireModules = [this.map.id];
-                                err.requireType = 'define';
+                                err.requireModules = this.map.isDefine ? [this.map.id] : null;
+                                err.requireType = this.map.isDefine ? 'define' : 'require';
                                 return onError((this.error = err));
                             }
 
@@ -1008,7 +1141,7 @@ var requirejs, require, define;
                         }
 
                         //Clean up
-                        delete registry[id];
+                        cleanRegistry(id);
 
                         this.defined = true;
                     }
@@ -1039,11 +1172,11 @@ var requirejs, require, define;
 
                 on(pluginMap, 'defined', bind(this, function (plugin) {
                     var load, normalizedMap, normalizedMod,
+                        bundleId = getOwn(bundlesMap, this.map.id),
                         name = this.map.name,
                         parentName = this.map.parentMap ? this.map.parentMap.name : null,
                         localRequire = context.makeRequire(map.parentMap, {
-                            enableBuildCallback: true,
-                            skipMap: true
+                            enableBuildCallback: true
                         });
 
                     //If current map is not normalized, wait for that
@@ -1082,6 +1215,14 @@ var requirejs, require, define;
                             normalizedMod.enable();
                         }
 
+                        return;
+                    }
+
+                    //If a paths config, then just load that file instead to
+                    //resolve the plugin, as it is built into that paths layer.
+                    if (bundleId) {
+                        this.map.url = context.nameToUrl(bundleId);
+                        this.load();
                         return;
                     }
 
@@ -1141,8 +1282,11 @@ var requirejs, require, define;
                         try {
                             req.exec(text);
                         } catch (e) {
-                            throw new Error('fromText eval for ' + moduleName +
-                                            ' failed: ' + e);
+                            return onError(makeError('fromtexteval',
+                                             'fromText eval for ' + id +
+                                            ' failed: ' + e,
+                                             e,
+                                             [id]));
                         }
 
                         if (hasInteractive) {
@@ -1172,6 +1316,7 @@ var requirejs, require, define;
             },
 
             enable: function () {
+                enabledRegistry[this.map.id] = this;
                 this.enabled = true;
 
                 //Set flag mentioning that the module is enabling,
@@ -1208,7 +1353,7 @@ var requirejs, require, define;
                         }));
 
                         if (this.errback) {
-                            on(depMap, 'error', this.errback);
+                            on(depMap, 'error', bind(this, this.errback));
                         }
                     }
 
@@ -1331,6 +1476,7 @@ var requirejs, require, define;
             Module: Module,
             makeModuleMap: makeModuleMap,
             nextTick: req.nextTick,
+            onError: onError,
 
             /**
              * Set a configuration for the context.
@@ -1344,27 +1490,37 @@ var requirejs, require, define;
                     }
                 }
 
-                //Save off the paths and packages since they require special processing,
+                //Save off the paths since they require special processing,
                 //they are additive.
-                var pkgs = config.pkgs,
-                    shim = config.shim,
+                var shim = config.shim,
                     objs = {
                         paths: true,
+                        bundles: true,
                         config: true,
                         map: true
                     };
 
                 eachProp(cfg, function (value, prop) {
                     if (objs[prop]) {
-                        if (prop === 'map') {
-                            mixin(config[prop], value, true, true);
-                        } else {
-                            mixin(config[prop], value, true);
+                        if (!config[prop]) {
+                            config[prop] = {};
                         }
+                        mixin(config[prop], value, true, true);
                     } else {
                         config[prop] = value;
                     }
                 });
+
+                //Reverse map the bundles
+                if (cfg.bundles) {
+                    eachProp(cfg.bundles, function (value, prop) {
+                        each(value, function (v) {
+                            if (v !== prop) {
+                                bundlesMap[v] = prop;
+                            }
+                        });
+                    });
+                }
 
                 //Merge shim
                 if (cfg.shim) {
@@ -1386,29 +1542,25 @@ var requirejs, require, define;
                 //Adjust packages if necessary.
                 if (cfg.packages) {
                     each(cfg.packages, function (pkgObj) {
-                        var location;
+                        var location, name;
 
                         pkgObj = typeof pkgObj === 'string' ? { name: pkgObj } : pkgObj;
+
+                        name = pkgObj.name;
                         location = pkgObj.location;
+                        if (location) {
+                            config.paths[name] = pkgObj.location;
+                        }
 
-                        //Create a brand new object on pkgs, since currentPackages can
-                        //be passed in again, and config.pkgs is the internal transformed
-                        //state for all package configs.
-                        pkgs[pkgObj.name] = {
-                            name: pkgObj.name,
-                            location: location || pkgObj.name,
-                            //Remove leading dot in main, so main paths are normalized,
-                            //and remove any trailing .js, since different package
-                            //envs have different conventions: some use a module name,
-                            //some use a file name.
-                            main: (pkgObj.main || 'main')
-                                  .replace(currDirRegExp, '')
-                                  .replace(jsSuffixRegExp, '')
-                        };
+                        //Save pointer to main module ID for pkg name.
+                        //Remove leading dot in main, so main paths are normalized,
+                        //and remove any trailing .js, since different package
+                        //envs have different conventions: some use a module name,
+                        //some use a file name.
+                        config.pkgs[name] = pkgObj.name + '/' + (pkgObj.main || 'main')
+                                     .replace(currDirRegExp, '')
+                                     .replace(jsSuffixRegExp, '');
                     });
-
-                    //Done with modifications, assing packages back to context config
-                    config.pkgs = pkgs;
                 }
 
                 //If there are any "waiting to execute" modules in the registry,
@@ -1468,7 +1620,7 @@ var requirejs, require, define;
                         //Synchronous access to one module. If require.get is
                         //available (as in the Node adapter), prefer that.
                         if (req.get) {
-                            return req.get(context, deps, relMap);
+                            return req.get(context, deps, relMap, localRequire);
                         }
 
                         //Normalize module name, if it contains . or ..
@@ -1519,16 +1671,20 @@ var requirejs, require, define;
                      * plain URLs like nameToUrl.
                      */
                     toUrl: function (moduleNamePlusExt) {
-                        var index = moduleNamePlusExt.lastIndexOf('.'),
-                            ext = null;
+                        var ext,
+                            index = moduleNamePlusExt.lastIndexOf('.'),
+                            segment = moduleNamePlusExt.split('/')[0],
+                            isRelative = segment === '.' || segment === '..';
 
-                        if (index !== -1) {
+                        //Have a file extension alias, and it is not the
+                        //dots from a relative path.
+                        if (index !== -1 && (!isRelative || index > 1)) {
                             ext = moduleNamePlusExt.substring(index, moduleNamePlusExt.length);
                             moduleNamePlusExt = moduleNamePlusExt.substring(0, index);
                         }
 
                         return context.nameToUrl(normalize(moduleNamePlusExt,
-                                                relMap && relMap.id, true), ext);
+                                                relMap && relMap.id, true), ext,  true);
                     },
 
                     defined: function (id) {
@@ -1551,9 +1707,20 @@ var requirejs, require, define;
                         var map = makeModuleMap(id, relMap, true),
                             mod = getOwn(registry, id);
 
+                        removeScript(id);
+
                         delete defined[id];
                         delete urlFetched[map.url];
                         delete undefEvents[id];
+
+                        //Clean queued defines too. Go backwards
+                        //in array so that the splices do not
+                        //mess up the iteration.
+                        eachReverse(defQueue, function(args, i) {
+                            if(args[0] === id) {
+                                defQueue.splice(i, 1);
+                            }
+                        });
 
                         if (mod) {
                             //Hold on to listeners in case the
@@ -1573,10 +1740,11 @@ var requirejs, require, define;
 
             /**
              * Called to enable a module if it is still in the registry
-             * awaiting enablement. parent module is passed in for context,
-             * used by the optimizer.
+             * awaiting enablement. A second arg, parent, the parent module,
+             * is passed in for context, when this method is overridden by
+             * the optimizer. Not shown here to keep code compact.
              */
-            enable: function (depMap, parent) {
+            enable: function (depMap) {
                 var mod = getOwn(registry, depMap.id);
                 if (mod) {
                     getModule(depMap).enable();
@@ -1646,9 +1814,20 @@ var requirejs, require, define;
              * it is assumed to have already been normalized. This is an
              * internal API, not a public one. Use toUrl for the public API.
              */
-            nameToUrl: function (moduleName, ext) {
-                var paths, pkgs, pkg, pkgPath, syms, i, parentModule, url,
-                    parentPath;
+            nameToUrl: function (moduleName, ext, skipExt) {
+                var paths, syms, i, parentModule, url,
+                    parentPath, bundleId,
+                    pkgMain = getOwn(config.pkgs, moduleName);
+
+                if (pkgMain) {
+                    moduleName = pkgMain;
+                }
+
+                bundleId = getOwn(bundlesMap, moduleName);
+
+                if (bundleId) {
+                    return context.nameToUrl(bundleId, ext, skipExt);
+                }
 
                 //If a colon is in the URL, it indicates a protocol is used and it is just
                 //an URL to a file, or if it starts with a slash, contains a query arg (i.e. ?)
@@ -1662,7 +1841,6 @@ var requirejs, require, define;
                 } else {
                     //A module that needs to be converted to a path.
                     paths = config.paths;
-                    pkgs = config.pkgs;
 
                     syms = moduleName.split('/');
                     //For each module name segment, see if there is a path
@@ -1670,7 +1848,7 @@ var requirejs, require, define;
                     //and work up from it.
                     for (i = syms.length; i > 0; i -= 1) {
                         parentModule = syms.slice(0, i).join('/');
-                        pkg = getOwn(pkgs, parentModule);
+
                         parentPath = getOwn(paths, parentModule);
                         if (parentPath) {
                             //If an array, it means there are a few choices,
@@ -1680,22 +1858,12 @@ var requirejs, require, define;
                             }
                             syms.splice(0, i, parentPath);
                             break;
-                        } else if (pkg) {
-                            //If module name is just the package name, then looking
-                            //for the main module.
-                            if (moduleName === pkg.name) {
-                                pkgPath = pkg.location + '/' + pkg.main;
-                            } else {
-                                pkgPath = pkg.location;
-                            }
-                            syms.splice(0, i, pkgPath);
-                            break;
                         }
                     }
 
                     //Join the path parts together, then figure out if baseUrl is needed.
                     url = syms.join('/');
-                    url += (ext || (/\?/.test(url) ? '' : '.js'));
+                    url += (ext || (/^data\:|\?/.test(url) || skipExt ? '' : '.js'));
                     url = (url.charAt(0) === '/' || url.match(/^[\w\+\.\-]+:/) ? '' : config.baseUrl) + url;
                 }
 
@@ -1711,7 +1879,7 @@ var requirejs, require, define;
             },
 
             /**
-             * Executes a module callack function. Broken out as a separate function
+             * Executes a module callback function. Broken out as a separate function
              * solely to allow the build system to sequence the files in the built
              * layer in the right sequence.
              *
@@ -1749,7 +1917,7 @@ var requirejs, require, define;
             onScriptError: function (evt) {
                 var data = getScriptData(evt);
                 if (!hasPathFallback(data.id)) {
-                    return onError(makeError('scripterror', 'Script error', evt, [data.id]));
+                    return onError(makeError('scripterror', 'Script error for: ' + data.id, evt, [data.id]));
                 }
             }
         };
@@ -1878,8 +2046,19 @@ var requirejs, require, define;
      * function. Intercept/override it if you want custom error handling.
      * @param {Error} err the error object.
      */
-    req.onError = function (err) {
-        throw err;
+    req.onError = defaultOnError;
+
+    /**
+     * Creates the node for the load command. Only used in browser envs.
+     */
+    req.createNode = function (config, moduleName, url) {
+        var node = config.xhtml ?
+                document.createElementNS('http://www.w3.org/1999/xhtml', 'html:script') :
+                document.createElement('script');
+        node.type = config.scriptType || 'text/javascript';
+        node.charset = 'utf-8';
+        node.async = true;
+        return node;
     };
 
     /**
@@ -1896,12 +2075,7 @@ var requirejs, require, define;
             node;
         if (isBrowser) {
             //In the browser so use a script tag
-            node = config.xhtml ?
-                    document.createElementNS('http://www.w3.org/1999/xhtml', 'html:script') :
-                    document.createElement('script');
-            node.type = config.scriptType || 'text/javascript';
-            node.charset = 'utf-8';
-            node.async = true;
+            node = req.createNode(config, moduleName, url);
 
             node.setAttribute('data-requirecontext', context.contextName);
             node.setAttribute('data-requiremodule', moduleName);
@@ -1934,7 +2108,7 @@ var requirejs, require, define;
                 node.attachEvent('onreadystatechange', context.onScriptLoad);
                 //It would be great to add an error handler here to catch
                 //404s in IE9+. However, onreadystatechange will fire before
-                //the error handler, so that does not help. If addEvenListener
+                //the error handler, so that does not help. If addEventListener
                 //is used, then IE will fire error before load, but we cannot
                 //use that pathway given the connect.microsoft.com issue
                 //mentioned above about not doing the 'script execute,
@@ -1963,16 +2137,24 @@ var requirejs, require, define;
 
             return node;
         } else if (isWebWorker) {
-            //In a web worker, use importScripts. This is not a very
-            //efficient use of importScripts, importScripts will block until
-            //its script is downloaded and evaluated. However, if web workers
-            //are in play, the expectation that a build has been done so that
-            //only one script needs to be loaded anyway. This may need to be
-            //reevaluated if other use cases become common.
-            importScripts(url);
+            try {
+                //In a web worker, use importScripts. This is not a very
+                //efficient use of importScripts, importScripts will block until
+                //its script is downloaded and evaluated. However, if web workers
+                //are in play, the expectation that a build has been done so that
+                //only one script needs to be loaded anyway. This may need to be
+                //reevaluated if other use cases become common.
+                importScripts(url);
 
-            //Account for anonymous modules
-            context.completeLoad(moduleName);
+                //Account for anonymous modules
+                context.completeLoad(moduleName);
+            } catch (e) {
+                context.onError(makeError('importscripts',
+                                'importScripts failed for ' +
+                                    moduleName + ' at ' + url,
+                                e,
+                                [moduleName]));
+            }
         }
     };
 
@@ -1990,7 +2172,7 @@ var requirejs, require, define;
     }
 
     //Look for a data-main script attribute, which could also adjust the baseUrl.
-    if (isBrowser) {
+    if (isBrowser && !cfg.skipDataMain) {
         //Figure out baseUrl. Get it from the script tag with require.js in it.
         eachReverse(scripts(), function (script) {
             //Set the 'head' where we can append children by
@@ -2004,24 +2186,31 @@ var requirejs, require, define;
             //baseUrl, if it is not already set.
             dataMain = script.getAttribute('data-main');
             if (dataMain) {
+                //Preserve dataMain in case it is a path (i.e. contains '?')
+                mainScript = dataMain;
+
                 //Set final baseUrl if there is not already an explicit one.
                 if (!cfg.baseUrl) {
                     //Pull off the directory of data-main for use as the
                     //baseUrl.
-                    src = dataMain.split('/');
+                    src = mainScript.split('/');
                     mainScript = src.pop();
                     subPath = src.length ? src.join('/')  + '/' : './';
 
                     cfg.baseUrl = subPath;
-                    dataMain = mainScript;
                 }
 
-                //Strip off any trailing .js since dataMain is now
+                //Strip off any trailing .js since mainScript is now
                 //like a module name.
-                dataMain = dataMain.replace(jsSuffixRegExp, '');
+                mainScript = mainScript.replace(jsSuffixRegExp, '');
+
+                 //If mainScript is still a path, fall back to dataMain
+                if (req.jsExtRegExp.test(mainScript)) {
+                    mainScript = dataMain;
+                }
 
                 //Put the data-main script in the files to load.
-                cfg.deps = cfg.deps ? cfg.deps.concat(dataMain) : [dataMain];
+                cfg.deps = cfg.deps ? cfg.deps.concat(mainScript) : [mainScript];
 
                 return true;
             }
@@ -2049,12 +2238,13 @@ var requirejs, require, define;
         //This module may not have dependencies
         if (!isArray(deps)) {
             callback = deps;
-            deps = [];
+            deps = null;
         }
 
         //If no name, and callback is a function, then figure out if it a
         //CommonJS thing with dependencies.
-        if (!deps.length && isFunction(callback)) {
+        if (!deps && isFunction(callback)) {
+            deps = [];
             //Remove comments from the callback string,
             //look for require calls, and pull them into the dependencies,
             //but only if there are function args.
@@ -2117,9 +2307,16 @@ var requirejs, require, define;
 }(this));
 
 
+
+    this.requirejsVars = {
+        require: require,
+        requirejs: require,
+        define: define
+    };
+
     if (env === 'browser') {
         /**
- * @license RequireJS rhino Copyright (c) 2012, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS rhino Copyright (c) 2012-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2148,7 +2345,7 @@ var requirejs, require, define;
 }());
     } else if (env === 'rhino') {
         /**
- * @license RequireJS rhino Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS rhino Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2168,16 +2365,11 @@ var requirejs, require, define;
 
 }());
     } else if (env === 'node') {
-        this.requirejsVars = {
-            require: require,
-            requirejs: require,
-            define: define,
-            nodeRequire: nodeRequire
-        };
+        this.requirejsVars.nodeRequire = nodeRequire;
         require.nodeRequire = nodeRequire;
 
         /**
- * @license RequireJS node Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS node Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2213,14 +2405,20 @@ var requirejs, require, define;
         fn();
     }
 
+    function makeError(message, moduleName) {
+        var err = new Error(message);
+        err.requireModules = [moduleName];
+        return err;
+    }
+
     //Supply an implementation that allows synchronous get of a module.
-    req.get = function (context, moduleName, relModuleMap) {
+    req.get = function (context, moduleName, relModuleMap, localRequire) {
         if (moduleName === "require" || moduleName === "exports" || moduleName === "module") {
-            req.onError(new Error("Explicit require of " + moduleName + " is not allowed."));
+            context.onError(makeError("Explicit require of " + moduleName + " is not allowed.", moduleName));
         }
 
         var ret, oldTick,
-            moduleMap = context.makeModuleMap(moduleName, relModuleMap);
+            moduleMap = context.makeModuleMap(moduleName, relModuleMap, false, true);
 
         //Normalize module name, if it contains . or ..
         moduleName = moduleMap.id;
@@ -2237,24 +2435,26 @@ var requirejs, require, define;
                         //A plugin, call requirejs to handle it. Now that
                         //nextTick is syncTick, the require will complete
                         //synchronously.
-                        context.require([moduleMap.originalName]);
+                        localRequire([moduleMap.originalName]);
 
                         //Now that plugin is loaded, can regenerate the moduleMap
                         //to get the final, normalized ID.
-                        moduleMap = context.makeModuleMap(moduleMap.originalName, relModuleMap);
-
-                        //The above calls are sync, so can do the next thing safely.
-                        ret = context.defined[moduleMap.id];
+                        moduleMap = context.makeModuleMap(moduleMap.originalName, relModuleMap, false, true);
+                        moduleName = moduleMap.id;
                     } else {
                         //Try to dynamically fetch it.
                         req.load(context, moduleName, moduleMap.url);
 
                         //Enable the module
                         context.enable(moduleMap, relModuleMap);
-
-                        //The above calls are sync, so can do the next thing safely.
-                        ret = context.defined[moduleName];
                     }
+
+                    //Break any cycles by requiring it normally, but this will
+                    //finish synchronously
+                    require([moduleName]);
+
+                    //The above calls are sync, so can do the next thing safely.
+                    ret = context.defined[moduleName];
                 } finally {
                     context.nextTick = oldTick;
                 }
@@ -2278,7 +2478,13 @@ var requirejs, require, define;
     };
 
     req.load = function (context, moduleName, url) {
-        var contents, err;
+        var contents, err,
+            config = context.config;
+
+        if (config.shim[moduleName] && (!config.suppress || !config.suppress.nodeShim)) {
+            console.warn('Shim config not supported in Node, may or may not work. Detected ' +
+                            'for module: ' + moduleName);
+        }
 
         if (exists(url)) {
             contents = fs.readFileSync(url, 'utf8');
@@ -2291,24 +2497,39 @@ var requirejs, require, define;
                                 moduleName + '" failed with error: ' + e);
                 err.originalError = e;
                 err.moduleName = moduleName;
+                err.requireModules = [moduleName];
                 err.fileName = url;
-                return req.onError(err);
+                return context.onError(err);
             }
         } else {
             def(moduleName, function () {
                 //Get the original name, since relative requires may be
-                //resolved differently in node (issue #202)
-                var originalName = hasProp(context.registry, moduleName) &&
-                            context.registry[moduleName].map.originalName;
+                //resolved differently in node (issue #202). Also, if relative,
+                //make it relative to the URL of the item requesting it
+                //(issue #393)
+                var dirName,
+                    map = hasProp(context.registry, moduleName) &&
+                            context.registry[moduleName].map,
+                    parentMap = map && map.parentMap,
+                    originalName = map && map.originalName;
+
+                if (originalName.charAt(0) === '.' && parentMap) {
+                    dirName = parentMap.url.split('/');
+                    dirName.pop();
+                    originalName = dirName.join('/') + '/' + originalName;
+                }
 
                 try {
                     return (context.config.nodeRequire || req.nodeRequire)(originalName);
                 } catch (e) {
-                    err = new Error('Calling node\'s require("' +
-                                        originalName + '") failed with error: ' + e);
+                    err = new Error('Tried loading "' + moduleName + '" at ' +
+                                     url + ' then tried node\'s require("' +
+                                        originalName + '") and it failed ' +
+                                     'with error: ' + e);
                     err.originalError = e;
                     err.moduleName = originalName;
-                    return req.onError(err);
+                    err.requireModules = [moduleName];
+                    throw err;
                 }
             });
         }
@@ -2323,6 +2544,28 @@ var requirejs, require, define;
         text = req.makeNodeWrapper(text);
         return eval(text);
     };
+}());
+
+    } else if (env === 'xpconnect') {
+        /**
+ * @license RequireJS xpconnect Copyright (c) 2013-2014, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint */
+/*global require, load */
+
+(function () {
+    'use strict';
+    require.load = function (context, moduleName, url) {
+
+        load(url);
+
+        //Support anonymous modules.
+        context.completeLoad(moduleName);
+    };
+
 }());
 
     }
@@ -2340,7 +2583,7 @@ var requirejs, require, define;
      */
     function loadLib() {
         /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2359,14 +2602,20 @@ var requirejs, require, define;
 
     if (typeof Packages !== 'undefined') {
         env = 'rhino';
-    } else if (typeof process !== 'undefined') {
+    } else if (typeof process !== 'undefined' && process.versions && !!process.versions.node) {
         env = 'node';
     } else if ((typeof navigator !== 'undefined' && typeof document !== 'undefined') ||
             (typeof importScripts !== 'undefined' && typeof self !== 'undefined')) {
         env = 'browser';
+    } else if (typeof Components !== 'undefined' && Components.classes && Components.interfaces) {
+        env = 'xpconnect';
     }
 
     define('env', {
+        get: function () {
+            return env;
+        },
+
         load: function (name, req, load, config) {
             //Allow override in the config.
             if (config.env) {
@@ -2387,22 +2636,32 @@ var requirejs, require, define;
         }
     });
 }());/**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
 
 /*jslint plusplus: true */
-/*global define */
+/*global define, java */
 
 define('lang', function () {
     'use strict';
 
-    var lang,
+    var lang, isJavaObj,
         hasOwn = Object.prototype.hasOwnProperty;
 
     function hasProp(obj, prop) {
         return hasOwn.call(obj, prop);
+    }
+
+    isJavaObj = function () {
+        return false;
+    };
+
+    if (typeof java !== 'undefined' && java.lang && java.lang.Object) {
+        isJavaObj = function (obj) {
+            return obj instanceof java.lang.Object;
+        };
     }
 
     lang = {
@@ -2437,8 +2696,8 @@ define('lang', function () {
         _mixin: function(dest, source, override){
             var name;
             for (name in source) {
-                if(source.hasOwnProperty(name)
-                    && (override || !dest.hasOwnProperty(name))) {
+                if(source.hasOwnProperty(name) &&
+                    (override || !dest.hasOwnProperty(name))) {
                     dest[name] = source[name];
                 }
             }
@@ -2464,6 +2723,42 @@ define('lang', function () {
                 lang._mixin(dest, parameters[i], override);
             }
             return dest; // Object
+        },
+
+
+        /**
+         * Does a type of deep copy. Do not give it anything fancy, best
+         * for basic object copies of objects that also work well as
+         * JSON-serialized things, or has properties pointing to functions.
+         * For non-array/object values, just returns the same object.
+         * @param  {Object} obj      copy properties from this object
+         * @param  {Object} [result] optional result object to use
+         * @return {Object}
+         */
+        deeplikeCopy: function (obj) {
+            var type, result;
+
+            if (lang.isArray(obj)) {
+                result = [];
+                obj.forEach(function(value) {
+                    result.push(lang.deeplikeCopy(value));
+                });
+                return result;
+            }
+
+            type = typeof obj;
+            if (obj === null || obj === undefined || type === 'boolean' ||
+                type === 'string' || type === 'number' || lang.isFunction(obj) ||
+                lang.isRegExp(obj)|| isJavaObj(obj)) {
+                return obj;
+            }
+
+            //Anything else is an object, hopefully.
+            result = {};
+            lang.eachProp(obj, function(value, key) {
+                result[key] = lang.deeplikeCopy(value);
+            });
+            return result;
         },
 
         delegate: (function () {
@@ -2532,14 +2827,13 @@ define('lang', function () {
     };
     return lang;
 });
-
 /**
- * prim 0.0.0 Copyright (c) 2012, The Dojo Foundation All Rights Reserved.
+ * prim 0.0.1 Copyright (c) 2012-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/requirejs/prim for details
  */
 
-/*global process, setTimeout, define, module */
+/*global setImmediate, process, setTimeout, define, module */
 
 //Set prime.hideResolutionConflict = true to allow "resolution-races"
 //in promise-tests to pass.
@@ -2551,7 +2845,6 @@ var prim;
 (function () {
     'use strict';
     var op = Object.prototype,
-        ostring = op.toString,
         hasOwn = op.hasOwnProperty;
 
     function hasProp(obj, prop) {
@@ -2621,6 +2914,14 @@ var prim;
                 }
             },
 
+            finished: function () {
+                return hasProp(p, 'e') || hasProp(p, 'v');
+            },
+
+            rejected: function () {
+                return hasProp(p, 'e');
+            },
+
             resolve: function (v) {
                 if (check(p)) {
                     p.v = v;
@@ -2647,7 +2948,9 @@ var prim;
 
                     p.callback(function (v) {
                         try {
-                            v = yes ? yes(v) : v;
+                            if (yes && typeof yes === 'function') {
+                                v = yes(v);
+                            }
 
                             if (v && v.then) {
                                 v.then(next.resolve, next.reject);
@@ -2661,19 +2964,15 @@ var prim;
                         var err;
 
                         try {
-                            if (!no) {
+                            if (!no || typeof no !== 'function') {
                                 next.reject(e);
                             } else {
                                 err = no(e);
 
-                                if (err instanceof Error) {
-                                    next.reject(err);
+                                if (err && err.then) {
+                                    err.then(next.resolve, next.reject);
                                 } else {
-                                    if (err && err.then) {
-                                        err.then(next.resolve, next.reject);
-                                    } else {
-                                        next.resolve(err);
-                                    }
+                                    next.resolve(err);
                                 }
                             }
                         } catch (e2) {
@@ -2707,13 +3006,14 @@ var prim;
         return result;
     };
 
-    prim.nextTick = typeof process !== 'undefined' && process.nextTick ?
+    prim.nextTick = typeof setImmediate === 'function' ? setImmediate :
+        (typeof process !== 'undefined' && process.nextTick ?
             process.nextTick : (typeof setTimeout !== 'undefined' ?
                 function (fn) {
                 setTimeout(fn, 0);
             } : function (fn) {
         fn();
-    });
+    }));
 
     if (typeof define === 'function' && define.amd) {
         define('prim', function () { return prim; });
@@ -2721,10 +3021,9 @@ var prim;
         module.exports = prim;
     }
 }());
-
 if(env === 'browser') {
 /**
- * @license RequireJS Copyright (c) 2012, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2012-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2741,7 +3040,7 @@ define('browser/assert', function () {
 
 if(env === 'node') {
 /**
- * @license RequireJS Copyright (c) 2012, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2012-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2758,7 +3057,7 @@ define('node/assert', ['assert'], function (assert) {
 
 if(env === 'rhino') {
 /**
- * @license RequireJS Copyright (c) 2012, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2013-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2773,9 +3072,26 @@ define('rhino/assert', function () {
 
 }
 
+if(env === 'xpconnect') {
+/**
+ * @license RequireJS Copyright (c) 2013-2014, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint strict: false */
+/*global define: false, load: false */
+
+//Just a stub for use with uglify's consolidator.js
+define('xpconnect/assert', function () {
+    return {};
+});
+
+}
+
 if(env === 'browser') {
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2792,7 +3108,7 @@ define('browser/args', function () {
 
 if(env === 'node') {
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2804,8 +3120,8 @@ define('node/args', function () {
     //Do not return the "node" or "r.js" arguments
     var args = process.argv.slice(2);
 
-    //Ignore any command option used for rq.js
-    if (args[0] && args[0].indexOf('-' === 0)) {
+    //Ignore any command option used for main x.js branching
+    if (args[0] && args[0].indexOf('-') === 0) {
         args = args.slice(1);
     }
 
@@ -2816,7 +3132,7 @@ define('node/args', function () {
 
 if(env === 'rhino') {
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2829,8 +3145,33 @@ var jsLibRhinoArgs = (typeof rhinoArgs !== 'undefined' && rhinoArgs) || [].conca
 define('rhino/args', function () {
     var args = jsLibRhinoArgs;
 
-    //Ignore any command option used for rq.js
-    if (args[0] && args[0].indexOf('-' === 0)) {
+    //Ignore any command option used for main x.js branching
+    if (args[0] && args[0].indexOf('-') === 0) {
+        args = args.slice(1);
+    }
+
+    return args;
+});
+
+}
+
+if(env === 'xpconnect') {
+/**
+ * @license Copyright (c) 2013-2014, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint strict: false */
+/*global define, xpconnectArgs */
+
+var jsLibXpConnectArgs = (typeof xpconnectArgs !== 'undefined' && xpconnectArgs) || [].concat(Array.prototype.slice.call(arguments, 0));
+
+define('xpconnect/args', function () {
+    var args = jsLibXpConnectArgs;
+
+    //Ignore any command option used for main x.js branching
+    if (args[0] && args[0].indexOf('-') === 0) {
         args = args.slice(1);
     }
 
@@ -2841,7 +3182,7 @@ define('rhino/args', function () {
 
 if(env === 'browser') {
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2861,7 +3202,7 @@ define('browser/load', ['./file'], function (file) {
 
 if(env === 'node') {
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2882,7 +3223,7 @@ define('node/load', ['fs'], function (fs) {
 
 if(env === 'rhino') {
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -2896,19 +3237,36 @@ define('rhino/load', function () {
 
 }
 
+if(env === 'xpconnect') {
+/**
+ * @license RequireJS Copyright (c) 2013-2014, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint strict: false */
+/*global define: false, load: false */
+
+define('xpconnect/load', function () {
+    return load;
+});
+
+}
+
 if(env === 'browser') {
 /**
- * @license Copyright (c) 2012, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2012-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
 
 /*jslint sloppy: true, nomen: true */
-/*global require, define, console, XMLHttpRequest, requirejs */
+/*global require, define, console, XMLHttpRequest, requirejs, location */
 
 define('browser/file', ['prim'], function (prim) {
 
-    var file;
+    var file,
+        currDirRegExp = /^\.(\/|$)/;
 
     function frontSlash(path) {
         return path.replace(/\\/g, '/');
@@ -2957,6 +3315,26 @@ define('browser/file', ['prim'], function (prim) {
          * @param {String} fileName
          */
         absPath: function (fileName) {
+            var dir;
+            if (currDirRegExp.test(fileName)) {
+                dir = frontSlash(location.href);
+                if (dir.indexOf('/') !== -1) {
+                    dir = dir.split('/');
+
+                    //Pull off protocol and host, just want
+                    //to allow paths (other build parts, like
+                    //require._isSupportedBuildUrl do not support
+                    //full URLs), but a full path from
+                    //the root.
+                    dir.splice(0, 3);
+
+                    dir.pop();
+                    dir = '/' + dir.join('/');
+                }
+
+                fileName = dir + fileName.substring(1);
+            }
+
             return fileName;
         },
 
@@ -3055,7 +3433,7 @@ define('browser/file', ['prim'], function (prim) {
 
 if(env === 'node') {
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -3318,7 +3696,7 @@ define('node/file', ['fs', 'path', 'prim'], function (fs, path, prim) {
             //summary: deletes a file or directory if it exists.
             var files, i, stat;
             if (file.exists(fileName)) {
-                stat = fs.statSync(fileName);
+                stat = fs.lstatSync(fileName);
                 if (stat.isDirectory()) {
                     files = fs.readdirSync(fileName);
                     for (i = 0; i < files.length; i++) {
@@ -3343,7 +3721,7 @@ define('node/file', ['fs', 'path', 'prim'], function (fs, path, prim) {
                 for (i = 0; i < dirFileArray.length; i++) {
                     fileName = dirFileArray[i];
                     filePath = path.join(startDir, fileName);
-                    stat = fs.statSync(filePath);
+                    stat = fs.lstatSync(filePath);
                     if (stat.isDirectory()) {
                         file.deleteEmptyDirs(filePath);
                     }
@@ -3365,7 +3743,7 @@ define('node/file', ['fs', 'path', 'prim'], function (fs, path, prim) {
 
 if(env === 'rhino') {
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -3657,6 +4035,268 @@ define('rhino/file', ['prim'], function (prim) {
 
 }
 
+if(env === 'xpconnect') {
+/**
+ * @license RequireJS Copyright (c) 2013-2014, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+//Helper functions to deal with file I/O.
+
+/*jslint plusplus: false */
+/*global define, Components, xpcUtil */
+
+define('xpconnect/file', ['prim'], function (prim) {
+    var file,
+        Cc = Components.classes,
+        Ci = Components.interfaces,
+        //Depends on xpcUtil which is set up in x.js
+        xpfile = xpcUtil.xpfile;
+
+    function mkFullDir(dirObj) {
+        //1 is DIRECTORY_TYPE, 511 is 0777 permissions
+        if (!dirObj.exists()) {
+            dirObj.create(1, 511);
+        }
+    }
+
+    file = {
+        backSlashRegExp: /\\/g,
+
+        exclusionRegExp: /^\./,
+
+        getLineSeparator: function () {
+            return file.lineSeparator;
+        },
+
+        lineSeparator: ('@mozilla.org/windows-registry-key;1' in Cc) ?
+                        '\r\n' : '\n',
+
+        exists: function (fileName) {
+            return xpfile(fileName).exists();
+        },
+
+        parent: function (fileName) {
+            return xpfile(fileName).parent;
+        },
+
+        normalize: function (fileName) {
+            return file.absPath(fileName);
+        },
+
+        isFile: function (path) {
+            return xpfile(path).isFile();
+        },
+
+        isDirectory: function (path) {
+            return xpfile(path).isDirectory();
+        },
+
+        /**
+         * Gets the absolute file path as a string, normalized
+         * to using front slashes for path separators.
+         * @param {java.io.File||String} file
+         */
+        absPath: function (fileObj) {
+            if (typeof fileObj === "string") {
+                fileObj = xpfile(fileObj);
+            }
+            return fileObj.path;
+        },
+
+        getFilteredFileList: function (/*String*/startDir, /*RegExp*/regExpFilters, /*boolean?*/makeUnixPaths, /*boolean?*/startDirIsObject) {
+            //summary: Recurses startDir and finds matches to the files that match regExpFilters.include
+            //and do not match regExpFilters.exclude. Or just one regexp can be passed in for regExpFilters,
+            //and it will be treated as the "include" case.
+            //Ignores files/directories that start with a period (.) unless exclusionRegExp
+            //is set to another value.
+            var files = [], topDir, regExpInclude, regExpExclude, dirFileArray,
+                fileObj, filePath, ok, dirFiles;
+
+            topDir = startDir;
+            if (!startDirIsObject) {
+                topDir = xpfile(startDir);
+            }
+
+            regExpInclude = regExpFilters.include || regExpFilters;
+            regExpExclude = regExpFilters.exclude || null;
+
+            if (topDir.exists()) {
+                dirFileArray = topDir.directoryEntries;
+                while (dirFileArray.hasMoreElements()) {
+                    fileObj = dirFileArray.getNext().QueryInterface(Ci.nsILocalFile);
+                    if (fileObj.isFile()) {
+                        filePath = fileObj.path;
+                        if (makeUnixPaths) {
+                            if (filePath.indexOf("/") === -1) {
+                                filePath = filePath.replace(/\\/g, "/");
+                            }
+                        }
+
+                        ok = true;
+                        if (regExpInclude) {
+                            ok = filePath.match(regExpInclude);
+                        }
+                        if (ok && regExpExclude) {
+                            ok = !filePath.match(regExpExclude);
+                        }
+
+                        if (ok && (!file.exclusionRegExp ||
+                            !file.exclusionRegExp.test(fileObj.leafName))) {
+                            files.push(filePath);
+                        }
+                    } else if (fileObj.isDirectory() &&
+                              (!file.exclusionRegExp || !file.exclusionRegExp.test(fileObj.leafName))) {
+                        dirFiles = this.getFilteredFileList(fileObj, regExpFilters, makeUnixPaths, true);
+                        files.push.apply(files, dirFiles);
+                    }
+                }
+            }
+
+            return files; //Array
+        },
+
+        copyDir: function (/*String*/srcDir, /*String*/destDir, /*RegExp?*/regExpFilter, /*boolean?*/onlyCopyNew) {
+            //summary: copies files from srcDir to destDir using the regExpFilter to determine if the
+            //file should be copied. Returns a list file name strings of the destinations that were copied.
+            regExpFilter = regExpFilter || /\w/;
+
+            var fileNames = file.getFilteredFileList(srcDir, regExpFilter, true),
+            copiedFiles = [], i, srcFileName, destFileName;
+
+            for (i = 0; i < fileNames.length; i += 1) {
+                srcFileName = fileNames[i];
+                destFileName = srcFileName.replace(srcDir, destDir);
+
+                if (file.copyFile(srcFileName, destFileName, onlyCopyNew)) {
+                    copiedFiles.push(destFileName);
+                }
+            }
+
+            return copiedFiles.length ? copiedFiles : null; //Array or null
+        },
+
+        copyFile: function (/*String*/srcFileName, /*String*/destFileName, /*boolean?*/onlyCopyNew) {
+            //summary: copies srcFileName to destFileName. If onlyCopyNew is set, it only copies the file if
+            //srcFileName is newer than destFileName. Returns a boolean indicating if the copy occurred.
+            var destFile = xpfile(destFileName),
+            srcFile = xpfile(srcFileName);
+
+            //logger.trace("Src filename: " + srcFileName);
+            //logger.trace("Dest filename: " + destFileName);
+
+            //If onlyCopyNew is true, then compare dates and only copy if the src is newer
+            //than dest.
+            if (onlyCopyNew) {
+                if (destFile.exists() && destFile.lastModifiedTime >= srcFile.lastModifiedTime) {
+                    return false; //Boolean
+                }
+            }
+
+            srcFile.copyTo(destFile.parent, destFile.leafName);
+
+            return true; //Boolean
+        },
+
+        /**
+         * Renames a file. May fail if "to" already exists or is on another drive.
+         */
+        renameFile: function (from, to) {
+            var toFile = xpfile(to);
+            return xpfile(from).moveTo(toFile.parent, toFile.leafName);
+        },
+
+        readFile: xpcUtil.readFile,
+
+        readFileAsync: function (path, encoding) {
+            var d = prim();
+            try {
+                d.resolve(file.readFile(path, encoding));
+            } catch (e) {
+                d.reject(e);
+            }
+            return d.promise;
+        },
+
+        saveUtf8File: function (/*String*/fileName, /*String*/fileContents) {
+            //summary: saves a file using UTF-8 encoding.
+            file.saveFile(fileName, fileContents, "utf-8");
+        },
+
+        saveFile: function (/*String*/fileName, /*String*/fileContents, /*String?*/encoding) {
+            var outStream, convertStream,
+                fileObj = xpfile(fileName);
+
+            mkFullDir(fileObj.parent);
+
+            try {
+                outStream = Cc['@mozilla.org/network/file-output-stream;1']
+                             .createInstance(Ci.nsIFileOutputStream);
+                //438 is decimal for 0777
+                outStream.init(fileObj, 0x02 | 0x08 | 0x20, 511, 0);
+
+                convertStream = Cc['@mozilla.org/intl/converter-output-stream;1']
+                                  .createInstance(Ci.nsIConverterOutputStream);
+
+                convertStream.init(outStream, encoding, 0, 0);
+                convertStream.writeString(fileContents);
+            } catch (e) {
+                throw new Error((fileObj && fileObj.path || '') + ': ' + e);
+            } finally {
+                if (convertStream) {
+                    convertStream.close();
+                }
+                if (outStream) {
+                    outStream.close();
+                }
+            }
+        },
+
+        deleteFile: function (/*String*/fileName) {
+            //summary: deletes a file or directory if it exists.
+            var fileObj = xpfile(fileName);
+            if (fileObj.exists()) {
+                fileObj.remove(true);
+            }
+        },
+
+        /**
+         * Deletes any empty directories under the given directory.
+         * The startDirIsJavaObject is private to this implementation's
+         * recursion needs.
+         */
+        deleteEmptyDirs: function (startDir, startDirIsObject) {
+            var topDir = startDir,
+                dirFileArray, fileObj;
+
+            if (!startDirIsObject) {
+                topDir = xpfile(startDir);
+            }
+
+            if (topDir.exists()) {
+                dirFileArray = topDir.directoryEntries;
+                while (dirFileArray.hasMoreElements()) {
+                    fileObj = dirFileArray.getNext().QueryInterface(Ci.nsILocalFile);
+
+                    if (fileObj.isDirectory()) {
+                        file.deleteEmptyDirs(fileObj, true);
+                    }
+                }
+
+                //If the directory is empty now, delete it.
+                dirFileArray = topDir.directoryEntries;
+                if (!dirFileArray.hasMoreElements()) {
+                    file.deleteFile(topDir.path);
+                }
+            }
+        }
+    };
+
+    return file;
+});
+
+}
+
 if(env === 'browser') {
 /*global process */
 define('browser/quit', function () {
@@ -3671,9 +4311,26 @@ if(env === 'node') {
 define('node/quit', function () {
     'use strict';
     return function (code) {
-        return process.exit(code);
+        var draining = 0;
+        var exit = function () {
+            if (draining === 0) {
+                process.exit(code);
+            } else {
+                draining -= 1;
+            }
+        };
+        if (process.stdout.bufferSize) {
+            draining += 1;
+            process.stdout.once('drain', exit);
+        }
+        if (process.stderr.bufferSize) {
+            draining += 1;
+            process.stderr.once('drain', exit);
+        }
+        exit();
     };
 });
+
 }
 
 if(env === 'rhino') {
@@ -3687,9 +4344,20 @@ define('rhino/quit', function () {
 
 }
 
+if(env === 'xpconnect') {
+/*global quit */
+define('xpconnect/quit', function () {
+    'use strict';
+    return function (code) {
+        return quit(code);
+    };
+});
+
+}
+
 if(env === 'browser') {
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -3709,7 +4377,7 @@ define('browser/print', function () {
 
 if(env === 'node') {
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -3729,7 +4397,7 @@ define('node/print', function () {
 
 if(env === 'rhino') {
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -3742,8 +4410,24 @@ define('rhino/print', function () {
 });
 
 }
+
+if(env === 'xpconnect') {
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2013-2014, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
+
+/*jslint strict: false */
+/*global define: false, print: false */
+
+define('xpconnect/print', function () {
+    return print;
+});
+
+}
+/**
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -3804,8 +4488,6 @@ define('logger', ['env!env/print'], function (print) {
 //so that the build does not attempt to inline some env modules,
 //like Node's fs and path.
 
-//Commit 465a4eae86c7bae191b1ee427571543ace777117 on July 19, 2012
-define('esprima', ['exports'], function(exports) {
 /*
   Copyright (C) 2012 Ariya Hidayat <ariya.hidayat@gmail.com>
   Copyright (C) 2012 Mathias Bynens <mathias@qiwi.be>
@@ -3837,7 +4519,7 @@ define('esprima', ['exports'], function(exports) {
 */
 
 /*jslint bitwise:true plusplus:true */
-/*global esprima:true, exports:true,
+/*global esprima:true, define:true, exports:true, window: true,
 throwError: true, createLiteral: true, generateStatement: true,
 parseAssignmentExpression: true, parseBlock: true, parseExpression: true,
 parseFunctionDeclaration: true, parseFunctionExpression: true,
@@ -3845,7 +4527,19 @@ parseFunctionSourceElements: true, parseVariableIdentifier: true,
 parseLeftHandSideExpression: true,
 parseStatement: true, parseSourceElement: true */
 
-(function (exports) {
+(function (root, factory) {
+    'use strict';
+
+    // Universal Module Definition (UMD) to support AMD, CommonJS/Node.js,
+    // Rhino, and plain browser loading.
+    if (typeof define === 'function' && define.amd) {
+        define('esprima', ['exports'], factory);
+    } else if (typeof exports !== 'undefined') {
+        factory(exports);
+    } else {
+        factory((root.esprima = {}));
+    }
+}(this, function (exports) {
     'use strict';
 
     var Token,
@@ -3947,6 +4641,7 @@ parseStatement: true, parseSourceElement: true */
         UnterminatedRegExp:  'Invalid regular expression: missing /',
         InvalidLHSInAssignment:  'Invalid left-hand side in assignment',
         InvalidLHSInForIn:  'Invalid left-hand side in for-in',
+        MultipleDefaultsInSwitch: 'More than one default clause in switch statement',
         NoCatchOrFinally:  'Missing catch or finally after try',
         UnknownLabel: 'Undefined label \'%0\'',
         Redeclaration: '%0 \'%1\' has already been declared',
@@ -4135,12 +4830,6 @@ parseStatement: true, parseSourceElement: true */
         return isFutureReservedWord(id);
     }
 
-    // Return the next character and move forward.
-
-    function nextChar() {
-        return source[index++];
-    }
-
     // 7.4 Comments
 
     function skipComment() {
@@ -4153,7 +4842,7 @@ parseStatement: true, parseSourceElement: true */
             ch = source[index];
 
             if (lineComment) {
-                ch = nextChar();
+                ch = source[index++];
                 if (isLineTerminator(ch)) {
                     lineComment = false;
                     if (ch === '\r' && source[index] === '\n') {
@@ -4174,7 +4863,7 @@ parseStatement: true, parseSourceElement: true */
                         throwError({}, Messages.UnexpectedToken, 'ILLEGAL');
                     }
                 } else {
-                    ch = nextChar();
+                    ch = source[index++];
                     if (index >= length) {
                         throwError({}, Messages.UnexpectedToken, 'ILLEGAL');
                     }
@@ -4221,7 +4910,7 @@ parseStatement: true, parseSourceElement: true */
         len = (prefix === 'u') ? 4 : 2;
         for (i = 0; i < len; ++i) {
             if (index < length && isHexDigit(source[index])) {
-                ch = nextChar();
+                ch = source[index++];
                 code = code * 16 + '0123456789abcdef'.indexOf(ch.toLowerCase());
             } else {
                 return '';
@@ -4257,7 +4946,7 @@ parseStatement: true, parseSourceElement: true */
                 id = 'u';
             }
         } else {
-            id = nextChar();
+            id = source[index++];
         }
 
         while (index < length) {
@@ -4283,7 +4972,7 @@ parseStatement: true, parseSourceElement: true */
                     id += 'u';
                 }
             } else {
-                id += nextChar();
+                id += source[index++];
             }
         }
 
@@ -4382,7 +5071,7 @@ parseStatement: true, parseSourceElement: true */
         if (ch1 === '.' && !isDecimalDigit(ch2)) {
             return {
                 type: Token.Punctuator,
-                value: nextChar(),
+                value: source[index++],
                 lineNumber: lineNumber,
                 lineStart: lineStart,
                 range: [start, index]
@@ -4500,7 +5189,7 @@ parseStatement: true, parseSourceElement: true */
         if ('[]<>+-*%&|^!~?:=/'.indexOf(ch1) >= 0) {
             return {
                 type: Token.Punctuator,
-                value: nextChar(),
+                value: source[index++],
                 lineNumber: lineNumber,
                 lineStart: lineStart,
                 range: [start, index]
@@ -4520,20 +5209,20 @@ parseStatement: true, parseSourceElement: true */
         start = index;
         number = '';
         if (ch !== '.') {
-            number = nextChar();
+            number = source[index++];
             ch = source[index];
 
             // Hex number starts with '0x'.
             // Octal number starts with '0'.
             if (number === '0') {
                 if (ch === 'x' || ch === 'X') {
-                    number += nextChar();
+                    number += source[index++];
                     while (index < length) {
                         ch = source[index];
                         if (!isHexDigit(ch)) {
                             break;
                         }
-                        number += nextChar();
+                        number += source[index++];
                     }
 
                     if (number.length <= 2) {
@@ -4555,13 +5244,13 @@ parseStatement: true, parseSourceElement: true */
                         range: [start, index]
                     };
                 } else if (isOctalDigit(ch)) {
-                    number += nextChar();
+                    number += source[index++];
                     while (index < length) {
                         ch = source[index];
                         if (!isOctalDigit(ch)) {
                             break;
                         }
-                        number += nextChar();
+                        number += source[index++];
                     }
 
                     if (index < length) {
@@ -4591,38 +5280,38 @@ parseStatement: true, parseSourceElement: true */
                 if (!isDecimalDigit(ch)) {
                     break;
                 }
-                number += nextChar();
+                number += source[index++];
             }
         }
 
         if (ch === '.') {
-            number += nextChar();
+            number += source[index++];
             while (index < length) {
                 ch = source[index];
                 if (!isDecimalDigit(ch)) {
                     break;
                 }
-                number += nextChar();
+                number += source[index++];
             }
         }
 
         if (ch === 'e' || ch === 'E') {
-            number += nextChar();
+            number += source[index++];
 
             ch = source[index];
             if (ch === '+' || ch === '-') {
-                number += nextChar();
+                number += source[index++];
             }
 
             ch = source[index];
             if (isDecimalDigit(ch)) {
-                number += nextChar();
+                number += source[index++];
                 while (index < length) {
                     ch = source[index];
                     if (!isDecimalDigit(ch)) {
                         break;
                     }
-                    number += nextChar();
+                    number += source[index++];
                 }
             } else {
                 ch = 'character ' + ch;
@@ -4662,13 +5351,13 @@ parseStatement: true, parseSourceElement: true */
         ++index;
 
         while (index < length) {
-            ch = nextChar();
+            ch = source[index++];
 
             if (ch === quote) {
                 quote = '';
                 break;
             } else if (ch === '\\') {
-                ch = nextChar();
+                ch = source[index++];
                 if (!isLineTerminator(ch)) {
                     switch (ch) {
                     case 'n':
@@ -4698,7 +5387,7 @@ parseStatement: true, parseSourceElement: true */
                         str += '\f';
                         break;
                     case 'v':
-                        str += '\v';
+                        str += '\x0B';
                         break;
 
                     default:
@@ -4712,14 +5401,14 @@ parseStatement: true, parseSourceElement: true */
 
                             if (index < length && isOctalDigit(source[index])) {
                                 octal = true;
-                                code = code * 8 + '01234567'.indexOf(nextChar());
+                                code = code * 8 + '01234567'.indexOf(source[index++]);
 
                                 // 3 digits are only allowed when string starts
                                 // with 0, 1, 2, 3
                                 if ('0123'.indexOf(ch) >= 0 &&
                                         index < length &&
                                         isOctalDigit(source[index])) {
-                                    code = code * 8 + '01234567'.indexOf(nextChar());
+                                    code = code * 8 + '01234567'.indexOf(source[index++]);
                                 }
                             }
                             str += String.fromCharCode(code);
@@ -4756,7 +5445,7 @@ parseStatement: true, parseSourceElement: true */
     }
 
     function scanRegExp() {
-        var str = '', ch, start, pattern, flags, value, classMarker = false, restore;
+        var str, ch, start, pattern, flags, value, classMarker = false, restore, terminated = false;
 
         buffer = null;
         skipComment();
@@ -4764,24 +5453,25 @@ parseStatement: true, parseSourceElement: true */
         start = index;
         ch = source[index];
         assert(ch === '/', 'Regular expression literal must start with a slash');
-        str = nextChar();
+        str = source[index++];
 
         while (index < length) {
-            ch = nextChar();
+            ch = source[index++];
             str += ch;
-            if (classMarker) {
+            if (ch === '\\') {
+                ch = source[index++];
+                // ECMA-262 7.8.5
+                if (isLineTerminator(ch)) {
+                    throwError({}, Messages.UnterminatedRegExp);
+                }
+                str += ch;
+            } else if (classMarker) {
                 if (ch === ']') {
                     classMarker = false;
                 }
             } else {
-                if (ch === '\\') {
-                    ch = nextChar();
-                    // ECMA-262 7.8.5
-                    if (isLineTerminator(ch)) {
-                        throwError({}, Messages.UnterminatedRegExp);
-                    }
-                    str += ch;
-                } else if (ch === '/') {
+                if (ch === '/') {
+                    terminated = true;
                     break;
                 } else if (ch === '[') {
                     classMarker = true;
@@ -4791,7 +5481,7 @@ parseStatement: true, parseSourceElement: true */
             }
         }
 
-        if (str.length === 1) {
+        if (!terminated) {
             throwError({}, Messages.UnterminatedRegExp);
         }
 
@@ -4968,7 +5658,6 @@ parseStatement: true, parseSourceElement: true */
     }
 
     function throwErrorTolerant() {
-        var error;
         try {
             throwError.apply(null, arguments);
         } catch (e) {
@@ -4984,8 +5673,6 @@ parseStatement: true, parseSourceElement: true */
     // Throw an exception because of the token.
 
     function throwUnexpected(token) {
-        var s;
-
         if (token.type === Token.EOF) {
             throwError(token, Messages.UnexpectedEOS);
         }
@@ -5006,7 +5693,8 @@ parseStatement: true, parseSourceElement: true */
             if (isFutureReservedWord(token.value)) {
                 throwError(token, Messages.UnexpectedReserved);
             } else if (strict && isStrictModeReservedWord(token.value)) {
-                throwError(token, Messages.StrictReservedWord);
+                throwErrorTolerant(token, Messages.StrictReservedWord);
+                return;
             }
             throwError(token, Messages.UnexpectedToken, token.value);
         }
@@ -5096,7 +5784,6 @@ parseStatement: true, parseSourceElement: true */
         if (token.type !== Token.EOF && !match('}')) {
             throwUnexpected(token);
         }
-        return;
     }
 
     // Return true if provided expression is LeftHandSideExpression
@@ -5108,15 +5795,14 @@ parseStatement: true, parseSourceElement: true */
     // 11.1.4 Array Initialiser
 
     function parseArrayInitialiser() {
-        var elements = [],
-            undef;
+        var elements = [];
 
         expect('[');
 
         while (!match(']')) {
             if (match(',')) {
                 lex();
-                elements.push(undef);
+                elements.push(null);
             } else {
                 elements.push(parseAssignmentExpression());
 
@@ -5142,7 +5828,7 @@ parseStatement: true, parseSourceElement: true */
         previousStrict = strict;
         body = parseFunctionSourceElements();
         if (first && strict && isRestrictedWord(param[0].name)) {
-            throwError(first, Messages.StrictParamName);
+            throwErrorTolerant(first, Messages.StrictParamName);
         }
         strict = previousStrict;
 
@@ -5150,7 +5836,11 @@ parseStatement: true, parseSourceElement: true */
             type: Syntax.FunctionExpression,
             id: null,
             params: param,
-            body: body
+            defaults: [],
+            body: body,
+            rest: null,
+            generator: false,
+            expression: false
         };
     }
 
@@ -5162,7 +5852,7 @@ parseStatement: true, parseSourceElement: true */
 
         if (token.type === Token.StringLiteral || token.type === Token.NumericLiteral) {
             if (strict && token.octal) {
-                throwError(token, Messages.StrictOctalLiteral);
+                throwErrorTolerant(token, Messages.StrictOctalLiteral);
             }
             return createLiteral(token);
         }
@@ -5199,16 +5889,24 @@ parseStatement: true, parseSourceElement: true */
                 expect('(');
                 token = lookahead();
                 if (token.type !== Token.Identifier) {
-                    throwUnexpected(lex());
+                    expect(')');
+                    throwErrorTolerant(token, Messages.UnexpectedToken, token.value);
+                    return {
+                        type: Syntax.Property,
+                        key: key,
+                        value: parsePropertyFunction([]),
+                        kind: 'set'
+                    };
+                } else {
+                    param = [ parseVariableIdentifier() ];
+                    expect(')');
+                    return {
+                        type: Syntax.Property,
+                        key: key,
+                        value: parsePropertyFunction(param, token),
+                        kind: 'set'
+                    };
                 }
-                param = [ parseVariableIdentifier() ];
-                expect(')');
-                return {
-                    type: Syntax.Property,
-                    key: key,
-                    value: parsePropertyFunction(param, token),
-                    kind: 'set'
-                };
             } else {
                 expect(':');
                 return {
@@ -5233,7 +5931,7 @@ parseStatement: true, parseSourceElement: true */
     }
 
     function parseObjectInitialiser() {
-        var token, properties = [], property, name, kind, map = {}, toString = String;
+        var properties = [], property, name, kind, map = {}, toString = String;
 
         expect('{');
 
@@ -5251,13 +5949,13 @@ parseStatement: true, parseSourceElement: true */
                     if (strict && kind === PropertyKind.Data) {
                         throwErrorTolerant({}, Messages.StrictDuplicateProperty);
                     } else if (kind !== PropertyKind.Data) {
-                        throwError({}, Messages.AccessorDataProperty);
+                        throwErrorTolerant({}, Messages.AccessorDataProperty);
                     }
                 } else {
                     if (kind === PropertyKind.Data) {
-                        throwError({}, Messages.AccessorDataProperty);
+                        throwErrorTolerant({}, Messages.AccessorDataProperty);
                     } else if (map[name] & kind) {
-                        throwError({}, Messages.AccessorGetSet);
+                        throwErrorTolerant({}, Messages.AccessorGetSet);
                     }
                 }
                 map[name] |= kind;
@@ -5280,11 +5978,25 @@ parseStatement: true, parseSourceElement: true */
         };
     }
 
+    // 11.1.6 The Grouping Operator
+
+    function parseGroupExpression() {
+        var expr;
+
+        expect('(');
+
+        expr = parseExpression();
+
+        expect(')');
+
+        return expr;
+    }
+
+
     // 11.1 Primary Expressions
 
     function parsePrimaryExpression() {
-        var expr,
-            token = lookahead(),
+        var token = lookahead(),
             type = token.type;
 
         if (type === Token.Identifier) {
@@ -5335,10 +6047,7 @@ parseStatement: true, parseSourceElement: true */
         }
 
         if (match('(')) {
-            lex();
-            state.lastParenthesized = expr = parseExpression();
-            expect(')');
-            return expr;
+            return parseGroupExpression();
         }
 
         if (match('/') || match('/=')) {
@@ -5383,36 +6092,22 @@ parseStatement: true, parseSourceElement: true */
         };
     }
 
-    function parseNonComputedMember(object) {
-        return {
-            type: Syntax.MemberExpression,
-            computed: false,
-            object: object,
-            property: parseNonComputedProperty()
-        };
+    function parseNonComputedMember() {
+        expect('.');
+
+        return parseNonComputedProperty();
     }
 
-    function parseComputedMember(object) {
-        var property, expr;
+    function parseComputedMember() {
+        var expr;
 
         expect('[');
-        property = parseExpression();
-        expr = {
-            type: Syntax.MemberExpression,
-            computed: true,
-            object: object,
-            property: property
-        };
-        expect(']');
-        return expr;
-    }
 
-    function parseCallMember(object) {
-        return {
-            type: Syntax.CallExpression,
-            callee: object,
-            'arguments': parseArguments()
-        };
+        expr = parseExpression();
+
+        expect(']');
+
+        return expr;
     }
 
     function parseNewExpression() {
@@ -5434,41 +6129,58 @@ parseStatement: true, parseSourceElement: true */
     }
 
     function parseLeftHandSideExpressionAllowCall() {
-        var useNew, expr;
+        var expr;
 
-        useNew = matchKeyword('new');
-        expr = useNew ? parseNewExpression() : parsePrimaryExpression();
+        expr = matchKeyword('new') ? parseNewExpression() : parsePrimaryExpression();
 
-        while (index < length) {
-            if (match('.')) {
-                lex();
-                expr = parseNonComputedMember(expr);
+        while (match('.') || match('[') || match('(')) {
+            if (match('(')) {
+                expr = {
+                    type: Syntax.CallExpression,
+                    callee: expr,
+                    'arguments': parseArguments()
+                };
             } else if (match('[')) {
-                expr = parseComputedMember(expr);
-            } else if (match('(')) {
-                expr = parseCallMember(expr);
+                expr = {
+                    type: Syntax.MemberExpression,
+                    computed: true,
+                    object: expr,
+                    property: parseComputedMember()
+                };
             } else {
-                break;
+                expr = {
+                    type: Syntax.MemberExpression,
+                    computed: false,
+                    object: expr,
+                    property: parseNonComputedMember()
+                };
             }
         }
 
         return expr;
     }
 
+
     function parseLeftHandSideExpression() {
-        var useNew, expr;
+        var expr;
 
-        useNew = matchKeyword('new');
-        expr = useNew ? parseNewExpression() : parsePrimaryExpression();
+        expr = matchKeyword('new') ? parseNewExpression() : parsePrimaryExpression();
 
-        while (index < length) {
-            if (match('.')) {
-                lex();
-                expr = parseNonComputedMember(expr);
-            } else if (match('[')) {
-                expr = parseComputedMember(expr);
+        while (match('.') || match('[')) {
+            if (match('[')) {
+                expr = {
+                    type: Syntax.MemberExpression,
+                    computed: true,
+                    object: expr,
+                    property: parseComputedMember()
+                };
             } else {
-                break;
+                expr = {
+                    type: Syntax.MemberExpression,
+                    computed: false,
+                    object: expr,
+                    property: parseNonComputedMember()
+                };
             }
         }
 
@@ -5478,16 +6190,20 @@ parseStatement: true, parseSourceElement: true */
     // 11.3 Postfix Expressions
 
     function parsePostfixExpression() {
-        var expr = parseLeftHandSideExpressionAllowCall();
+        var expr = parseLeftHandSideExpressionAllowCall(), token;
+
+        token = lookahead();
+        if (token.type !== Token.Punctuator) {
+            return expr;
+        }
 
         if ((match('++') || match('--')) && !peekLineTerminator()) {
             // 11.3.1, 11.3.2
             if (strict && expr.type === Syntax.Identifier && isRestrictedWord(expr.name)) {
-                throwError({}, Messages.StrictLHSPostfix);
+                throwErrorTolerant({}, Messages.StrictLHSPostfix);
             }
-
             if (!isLeftHandSide(expr)) {
-                throwError({}, Messages.InvalidLHSInAssignment);
+                throwErrorTolerant({}, Messages.InvalidLHSInAssignment);
             }
 
             expr = {
@@ -5506,16 +6222,21 @@ parseStatement: true, parseSourceElement: true */
     function parseUnaryExpression() {
         var token, expr;
 
+        token = lookahead();
+        if (token.type !== Token.Punctuator && token.type !== Token.Keyword) {
+            return parsePostfixExpression();
+        }
+
         if (match('++') || match('--')) {
             token = lex();
             expr = parseUnaryExpression();
             // 11.4.4, 11.4.5
             if (strict && expr.type === Syntax.Identifier && isRestrictedWord(expr.name)) {
-                throwError({}, Messages.StrictLHSPrefix);
+                throwErrorTolerant({}, Messages.StrictLHSPrefix);
             }
 
             if (!isLeftHandSide(expr)) {
-                throwError({}, Messages.InvalidLHSInAssignment);
+                throwErrorTolerant({}, Messages.InvalidLHSInAssignment);
             }
 
             expr = {
@@ -5531,7 +6252,8 @@ parseStatement: true, parseSourceElement: true */
             expr = {
                 type: Syntax.UnaryExpression,
                 operator: lex().value,
-                argument: parseUnaryExpression()
+                argument: parseUnaryExpression(),
+                prefix: true
             };
             return expr;
         }
@@ -5540,7 +6262,8 @@ parseStatement: true, parseSourceElement: true */
             expr = {
                 type: Syntax.UnaryExpression,
                 operator: lex().value,
-                argument: parseUnaryExpression()
+                argument: parseUnaryExpression(),
+                prefix: true
             };
             if (strict && expr.operator === 'delete' && expr.argument.type === Syntax.Identifier) {
                 throwErrorTolerant({}, Messages.StrictDelete);
@@ -5754,19 +6477,20 @@ parseStatement: true, parseSourceElement: true */
     // 11.13 Assignment Operators
 
     function parseAssignmentExpression() {
-        var expr;
+        var token, expr;
 
+        token = lookahead();
         expr = parseConditionalExpression();
 
         if (matchAssign()) {
             // LeftHandSideExpression
             if (!isLeftHandSide(expr)) {
-                throwError({}, Messages.InvalidLHSInAssignment);
+                throwErrorTolerant({}, Messages.InvalidLHSInAssignment);
             }
 
             // 11.13.1
             if (strict && expr.type === Syntax.Identifier && isRestrictedWord(expr.name)) {
-                throwError({}, Messages.StrictLHSAssignment);
+                throwErrorTolerant(token, Messages.StrictLHSAssignment);
             }
 
             expr = {
@@ -5880,13 +6604,13 @@ parseStatement: true, parseSourceElement: true */
     function parseVariableDeclarationList(kind) {
         var list = [];
 
-        while (index < length) {
+        do {
             list.push(parseVariableDeclaration(kind));
             if (!match(',')) {
                 break;
             }
             lex();
-        }
+        } while (index < length);
 
         return list;
     }
@@ -6079,7 +6803,7 @@ parseStatement: true, parseSourceElement: true */
                 if (matchKeyword('in')) {
                     // LeftHandSideExpression
                     if (!isLeftHandSide(init)) {
-                        throwError({}, Messages.InvalidLHSInForIn);
+                        throwErrorTolerant({}, Messages.InvalidLHSInForIn);
                     }
 
                     lex();
@@ -6346,7 +7070,7 @@ parseStatement: true, parseSourceElement: true */
     }
 
     function parseSwitchStatement() {
-        var discriminant, cases, oldInSwitch;
+        var discriminant, cases, clause, oldInSwitch, defaultFound;
 
         expectKeyword('switch');
 
@@ -6358,24 +7082,33 @@ parseStatement: true, parseSourceElement: true */
 
         expect('{');
 
+        cases = [];
+
         if (match('}')) {
             lex();
             return {
                 type: Syntax.SwitchStatement,
-                discriminant: discriminant
+                discriminant: discriminant,
+                cases: cases
             };
         }
 
-        cases = [];
-
         oldInSwitch = state.inSwitch;
         state.inSwitch = true;
+        defaultFound = false;
 
         while (index < length) {
             if (match('}')) {
                 break;
             }
-            cases.push(parseSwitchCase());
+            clause = parseSwitchCase();
+            if (clause.test === null) {
+                if (defaultFound) {
+                    throwError({}, Messages.MultipleDefaultsInSwitch);
+                }
+                defaultFound = true;
+            }
+            cases.push(clause);
         }
 
         state.inSwitch = oldInSwitch;
@@ -6418,19 +7151,21 @@ parseStatement: true, parseSourceElement: true */
         expectKeyword('catch');
 
         expect('(');
-        if (!match(')')) {
-            param = parseExpression();
-            // 12.14.1
-            if (strict && param.type === Syntax.Identifier && isRestrictedWord(param.name)) {
-                throwErrorTolerant({}, Messages.StrictCatchVariable);
-            }
+        if (match(')')) {
+            throwUnexpected(lookahead());
         }
+
+        param = parseVariableIdentifier();
+        // 12.14.1
+        if (strict && isRestrictedWord(param.name)) {
+            throwErrorTolerant({}, Messages.StrictCatchVariable);
+        }
+
         expect(')');
 
         return {
             type: Syntax.CatchClause,
             param: param,
-            guard: null,
             body: parseBlock()
         };
     }
@@ -6458,6 +7193,7 @@ parseStatement: true, parseSourceElement: true */
         return {
             type: Syntax.TryStatement,
             block: block,
+            guardedHandlers: [],
             handlers: handlers,
             finalizer: finalizer
         };
@@ -6587,7 +7323,7 @@ parseStatement: true, parseSourceElement: true */
             if (directive === 'use strict') {
                 strict = true;
                 if (firstRestricted) {
-                    throwError(firstRestricted, Messages.StrictOctalLiteral);
+                    throwErrorTolerant(firstRestricted, Messages.StrictOctalLiteral);
                 }
             } else {
                 if (!firstRestricted && token.octal) {
@@ -6631,14 +7367,14 @@ parseStatement: true, parseSourceElement: true */
     }
 
     function parseFunctionDeclaration() {
-        var id, param, params = [], body, token, firstRestricted, message, previousStrict, paramSet;
+        var id, param, params = [], body, token, stricted, firstRestricted, message, previousStrict, paramSet;
 
         expectKeyword('function');
         token = lookahead();
         id = parseVariableIdentifier();
         if (strict) {
             if (isRestrictedWord(token.value)) {
-                throwError(token, Messages.StrictFunctionName);
+                throwErrorTolerant(token, Messages.StrictFunctionName);
             }
         } else {
             if (isRestrictedWord(token.value)) {
@@ -6659,10 +7395,12 @@ parseStatement: true, parseSourceElement: true */
                 param = parseVariableIdentifier();
                 if (strict) {
                     if (isRestrictedWord(token.value)) {
-                        throwError(token, Messages.StrictParamName);
+                        stricted = token;
+                        message = Messages.StrictParamName;
                     }
                     if (Object.prototype.hasOwnProperty.call(paramSet, token.value)) {
-                        throwError(token, Messages.StrictParamDupe);
+                        stricted = token;
+                        message = Messages.StrictParamDupe;
                     }
                 } else if (!firstRestricted) {
                     if (isRestrictedWord(token.value)) {
@@ -6692,18 +7430,25 @@ parseStatement: true, parseSourceElement: true */
         if (strict && firstRestricted) {
             throwError(firstRestricted, message);
         }
+        if (strict && stricted) {
+            throwErrorTolerant(stricted, message);
+        }
         strict = previousStrict;
 
         return {
             type: Syntax.FunctionDeclaration,
             id: id,
             params: params,
-            body: body
+            defaults: [],
+            body: body,
+            rest: null,
+            generator: false,
+            expression: false
         };
     }
 
     function parseFunctionExpression() {
-        var token, id = null, firstRestricted, message, param, params = [], body, previousStrict, paramSet;
+        var token, id = null, stricted, firstRestricted, message, param, params = [], body, previousStrict, paramSet;
 
         expectKeyword('function');
 
@@ -6712,7 +7457,7 @@ parseStatement: true, parseSourceElement: true */
             id = parseVariableIdentifier();
             if (strict) {
                 if (isRestrictedWord(token.value)) {
-                    throwError(token, Messages.StrictFunctionName);
+                    throwErrorTolerant(token, Messages.StrictFunctionName);
                 }
             } else {
                 if (isRestrictedWord(token.value)) {
@@ -6734,10 +7479,12 @@ parseStatement: true, parseSourceElement: true */
                 param = parseVariableIdentifier();
                 if (strict) {
                     if (isRestrictedWord(token.value)) {
-                        throwError(token, Messages.StrictParamName);
+                        stricted = token;
+                        message = Messages.StrictParamName;
                     }
                     if (Object.prototype.hasOwnProperty.call(paramSet, token.value)) {
-                        throwError(token, Messages.StrictParamDupe);
+                        stricted = token;
+                        message = Messages.StrictParamDupe;
                     }
                 } else if (!firstRestricted) {
                     if (isRestrictedWord(token.value)) {
@@ -6767,13 +7514,20 @@ parseStatement: true, parseSourceElement: true */
         if (strict && firstRestricted) {
             throwError(firstRestricted, message);
         }
+        if (strict && stricted) {
+            throwErrorTolerant(stricted, message);
+        }
         strict = previousStrict;
 
         return {
             type: Syntax.FunctionExpression,
             id: id,
             params: params,
-            body: body
+            defaults: [],
+            body: body,
+            rest: null,
+            generator: false,
+            expression: false
         };
     }
 
@@ -6818,7 +7572,7 @@ parseStatement: true, parseSourceElement: true */
             if (directive === 'use strict') {
                 strict = true;
                 if (firstRestricted) {
-                    throwError(firstRestricted, Messages.StrictOctalLiteral);
+                    throwErrorTolerant(firstRestricted, Messages.StrictOctalLiteral);
                 }
             } else {
                 if (!firstRestricted && token.octal) {
@@ -6850,7 +7604,7 @@ parseStatement: true, parseSourceElement: true */
     // The following functions are needed only when the option to preserve
     // the comments is active.
 
-    function addComment(start, end, type, value) {
+    function addComment(type, value, start, end, loc) {
         assert(typeof start === 'number', 'Comment must have valid position');
 
         // Because the way the actual token is scanned, often the comments
@@ -6864,14 +7618,15 @@ parseStatement: true, parseSourceElement: true */
         }
 
         extra.comments.push({
-            range: [start, end],
             type: type,
-            value: value
+            value: value,
+            range: [start, end],
+            loc: loc
         });
     }
 
     function scanComment() {
-        var comment, ch, start, blockComment, lineComment;
+        var comment, ch, loc, start, blockComment, lineComment;
 
         comment = '';
         blockComment = false;
@@ -6881,20 +7636,28 @@ parseStatement: true, parseSourceElement: true */
             ch = source[index];
 
             if (lineComment) {
-                ch = nextChar();
-                if (index >= length) {
+                ch = source[index++];
+                if (isLineTerminator(ch)) {
+                    loc.end = {
+                        line: lineNumber,
+                        column: index - lineStart - 1
+                    };
                     lineComment = false;
-                    comment += ch;
-                    addComment(start, index, 'Line', comment);
-                } else if (isLineTerminator(ch)) {
-                    lineComment = false;
-                    addComment(start, index, 'Line', comment);
+                    addComment('Line', comment, start, index - 1, loc);
                     if (ch === '\r' && source[index] === '\n') {
                         ++index;
                     }
                     ++lineNumber;
                     lineStart = index;
                     comment = '';
+                } else if (index >= length) {
+                    lineComment = false;
+                    comment += ch;
+                    loc.end = {
+                        line: lineNumber,
+                        column: length - lineStart
+                    };
+                    addComment('Line', comment, start, length, loc);
                 } else {
                     comment += ch;
                 }
@@ -6913,7 +7676,7 @@ parseStatement: true, parseSourceElement: true */
                         throwError({}, Messages.UnexpectedToken, 'ILLEGAL');
                     }
                 } else {
-                    ch = nextChar();
+                    ch = source[index++];
                     if (index >= length) {
                         throwError({}, Messages.UnexpectedToken, 'ILLEGAL');
                     }
@@ -6924,7 +7687,11 @@ parseStatement: true, parseSourceElement: true */
                             comment = comment.substr(0, comment.length - 1);
                             blockComment = false;
                             ++index;
-                            addComment(start, index, 'Block', comment);
+                            loc.end = {
+                                line: lineNumber,
+                                column: index - lineStart
+                            };
+                            addComment('Block', comment, start, index, loc);
                             comment = '';
                         }
                     }
@@ -6932,13 +7699,33 @@ parseStatement: true, parseSourceElement: true */
             } else if (ch === '/') {
                 ch = source[index + 1];
                 if (ch === '/') {
+                    loc = {
+                        start: {
+                            line: lineNumber,
+                            column: index - lineStart
+                        }
+                    };
                     start = index;
                     index += 2;
                     lineComment = true;
+                    if (index >= length) {
+                        loc.end = {
+                            line: lineNumber,
+                            column: index - lineStart
+                        };
+                        lineComment = false;
+                        addComment('Line', comment, start, index, loc);
+                    }
                 } else if (ch === '*') {
                     start = index;
                     index += 2;
                     blockComment = true;
+                    loc = {
+                        start: {
+                            line: lineNumber,
+                            column: index - lineStart - 2
+                        }
+                    };
                     if (index >= length) {
                         throwError({}, Messages.UnexpectedToken, 'ILLEGAL');
                     }
@@ -6960,10 +7747,44 @@ parseStatement: true, parseSourceElement: true */
         }
     }
 
+    function filterCommentLocation() {
+        var i, entry, comment, comments = [];
+
+        for (i = 0; i < extra.comments.length; ++i) {
+            entry = extra.comments[i];
+            comment = {
+                type: entry.type,
+                value: entry.value
+            };
+            if (extra.range) {
+                comment.range = entry.range;
+            }
+            if (extra.loc) {
+                comment.loc = entry.loc;
+            }
+            comments.push(comment);
+        }
+
+        extra.comments = comments;
+    }
+
     function collectToken() {
-        var token = extra.advance(),
-            range,
-            value;
+        var start, loc, token, range, value;
+
+        skipComment();
+        start = index;
+        loc = {
+            start: {
+                line: lineNumber,
+                column: index - lineStart
+            }
+        };
+
+        token = extra.advance();
+        loc.end = {
+            line: lineNumber,
+            column: index - lineStart
+        };
 
         if (token.type !== Token.EOF) {
             range = [token.range[0], token.range[1]];
@@ -6971,7 +7792,8 @@ parseStatement: true, parseSourceElement: true */
             extra.tokens.push({
                 type: TokenName[token.type],
                 value: value,
-                range: range
+                range: range,
+                loc: loc
             });
         }
 
@@ -6979,12 +7801,23 @@ parseStatement: true, parseSourceElement: true */
     }
 
     function collectRegex() {
-        var pos, regex, token;
+        var pos, loc, regex, token;
 
         skipComment();
 
         pos = index;
+        loc = {
+            start: {
+                line: lineNumber,
+                column: index - lineStart
+            }
+        };
+
         regex = extra.scanRegExp();
+        loc.end = {
+            line: lineNumber,
+            column: index - lineStart
+        };
 
         // Pop the previous token, which is likely '/' or '/='
         if (extra.tokens.length > 0) {
@@ -6999,10 +7832,32 @@ parseStatement: true, parseSourceElement: true */
         extra.tokens.push({
             type: 'RegularExpression',
             value: regex.literal,
-            range: [pos, index]
+            range: [pos, index],
+            loc: loc
         });
 
         return regex;
+    }
+
+    function filterTokenLocation() {
+        var i, entry, token, tokens = [];
+
+        for (i = 0; i < extra.tokens.length; ++i) {
+            entry = extra.tokens[i];
+            token = {
+                type: entry.type,
+                value: entry.value
+            };
+            if (extra.range) {
+                token.range = entry.range;
+            }
+            if (extra.loc) {
+                token.loc = entry.loc;
+            }
+            tokens.push(token);
+        }
+
+        extra.tokens = tokens;
     }
 
     function createLiteral(token) {
@@ -7020,6 +7875,174 @@ parseStatement: true, parseSourceElement: true */
         };
     }
 
+    function createLocationMarker() {
+        var marker = {};
+
+        marker.range = [index, index];
+        marker.loc = {
+            start: {
+                line: lineNumber,
+                column: index - lineStart
+            },
+            end: {
+                line: lineNumber,
+                column: index - lineStart
+            }
+        };
+
+        marker.end = function () {
+            this.range[1] = index;
+            this.loc.end.line = lineNumber;
+            this.loc.end.column = index - lineStart;
+        };
+
+        marker.applyGroup = function (node) {
+            if (extra.range) {
+                node.groupRange = [this.range[0], this.range[1]];
+            }
+            if (extra.loc) {
+                node.groupLoc = {
+                    start: {
+                        line: this.loc.start.line,
+                        column: this.loc.start.column
+                    },
+                    end: {
+                        line: this.loc.end.line,
+                        column: this.loc.end.column
+                    }
+                };
+            }
+        };
+
+        marker.apply = function (node) {
+            if (extra.range) {
+                node.range = [this.range[0], this.range[1]];
+            }
+            if (extra.loc) {
+                node.loc = {
+                    start: {
+                        line: this.loc.start.line,
+                        column: this.loc.start.column
+                    },
+                    end: {
+                        line: this.loc.end.line,
+                        column: this.loc.end.column
+                    }
+                };
+            }
+        };
+
+        return marker;
+    }
+
+    function trackGroupExpression() {
+        var marker, expr;
+
+        skipComment();
+        marker = createLocationMarker();
+        expect('(');
+
+        expr = parseExpression();
+
+        expect(')');
+
+        marker.end();
+        marker.applyGroup(expr);
+
+        return expr;
+    }
+
+    function trackLeftHandSideExpression() {
+        var marker, expr;
+
+        skipComment();
+        marker = createLocationMarker();
+
+        expr = matchKeyword('new') ? parseNewExpression() : parsePrimaryExpression();
+
+        while (match('.') || match('[')) {
+            if (match('[')) {
+                expr = {
+                    type: Syntax.MemberExpression,
+                    computed: true,
+                    object: expr,
+                    property: parseComputedMember()
+                };
+                marker.end();
+                marker.apply(expr);
+            } else {
+                expr = {
+                    type: Syntax.MemberExpression,
+                    computed: false,
+                    object: expr,
+                    property: parseNonComputedMember()
+                };
+                marker.end();
+                marker.apply(expr);
+            }
+        }
+
+        return expr;
+    }
+
+    function trackLeftHandSideExpressionAllowCall() {
+        var marker, expr;
+
+        skipComment();
+        marker = createLocationMarker();
+
+        expr = matchKeyword('new') ? parseNewExpression() : parsePrimaryExpression();
+
+        while (match('.') || match('[') || match('(')) {
+            if (match('(')) {
+                expr = {
+                    type: Syntax.CallExpression,
+                    callee: expr,
+                    'arguments': parseArguments()
+                };
+                marker.end();
+                marker.apply(expr);
+            } else if (match('[')) {
+                expr = {
+                    type: Syntax.MemberExpression,
+                    computed: true,
+                    object: expr,
+                    property: parseComputedMember()
+                };
+                marker.end();
+                marker.apply(expr);
+            } else {
+                expr = {
+                    type: Syntax.MemberExpression,
+                    computed: false,
+                    object: expr,
+                    property: parseNonComputedMember()
+                };
+                marker.end();
+                marker.apply(expr);
+            }
+        }
+
+        return expr;
+    }
+
+    function filterGroup(node) {
+        var n, i, entry;
+
+        n = (Object.prototype.toString.apply(node) === '[object Array]') ? [] : {};
+        for (i in node) {
+            if (node.hasOwnProperty(i) && i !== 'groupRange' && i !== 'groupLoc') {
+                entry = node[i];
+                if (entry === null || typeof entry !== 'object' || entry instanceof RegExp) {
+                    n[i] = entry;
+                } else {
+                    n[i] = filterGroup(entry);
+                }
+            }
+        }
+        return n;
+    }
+
     function wrapTrackingFunction(range, loc) {
 
         return function (parseFunction) {
@@ -7030,6 +8053,8 @@ parseStatement: true, parseSourceElement: true */
             }
 
             function visit(node) {
+                var start, end;
+
                 if (isBinary(node.left)) {
                     visit(node.left);
                 }
@@ -7037,70 +8062,57 @@ parseStatement: true, parseSourceElement: true */
                     visit(node.right);
                 }
 
-                if (range && typeof node.range === 'undefined') {
-                    node.range = [node.left.range[0], node.right.range[1]];
+                if (range) {
+                    if (node.left.groupRange || node.right.groupRange) {
+                        start = node.left.groupRange ? node.left.groupRange[0] : node.left.range[0];
+                        end = node.right.groupRange ? node.right.groupRange[1] : node.right.range[1];
+                        node.range = [start, end];
+                    } else if (typeof node.range === 'undefined') {
+                        start = node.left.range[0];
+                        end = node.right.range[1];
+                        node.range = [start, end];
+                    }
                 }
-                if (loc && typeof node.loc === 'undefined') {
-                    node.loc = {
-                        start: node.left.loc.start,
-                        end: node.right.loc.end
-                    };
+                if (loc) {
+                    if (node.left.groupLoc || node.right.groupLoc) {
+                        start = node.left.groupLoc ? node.left.groupLoc.start : node.left.loc.start;
+                        end = node.right.groupLoc ? node.right.groupLoc.end : node.right.loc.end;
+                        node.loc = {
+                            start: start,
+                            end: end
+                        };
+                    } else if (typeof node.loc === 'undefined') {
+                        node.loc = {
+                            start: node.left.loc.start,
+                            end: node.right.loc.end
+                        };
+                    }
                 }
             }
 
             return function () {
-                var node, rangeInfo, locInfo;
+                var marker, node;
 
                 skipComment();
-                rangeInfo = [index, 0];
-                locInfo = {
-                    start: {
-                        line: lineNumber,
-                        column: index - lineStart
-                    }
-                };
 
+                marker = createLocationMarker();
                 node = parseFunction.apply(null, arguments);
-                if (typeof node !== 'undefined') {
+                marker.end();
 
-                    if (range) {
-                        rangeInfo[1] = index;
-                        node.range = rangeInfo;
-                    }
-
-                    if (loc) {
-                        locInfo.end = {
-                            line: lineNumber,
-                            column: index - lineStart
-                        };
-                        node.loc = locInfo;
-                    }
-
-                    if (isBinary(node)) {
-                        visit(node);
-                    }
-
-                    if (node.type === Syntax.MemberExpression) {
-                        if (typeof node.object.range !== 'undefined') {
-                            node.range[0] = node.object.range[0];
-                        }
-                        if (typeof node.object.loc !== 'undefined') {
-                            node.loc.start = node.object.loc.start;
-                        }
-                    }
-
-                    if (node.type === Syntax.CallExpression) {
-                        if (typeof node.callee.range !== 'undefined') {
-                            node.range[0] = node.callee.range[0];
-                        }
-                        if (typeof node.callee.loc !== 'undefined') {
-                            node.loc.start = node.callee.loc.start;
-                        }
-                    }
-                    return node;
+                if (range && typeof node.range === 'undefined') {
+                    marker.apply(node);
                 }
-            };
 
+                if (loc && typeof node.loc === 'undefined') {
+                    marker.apply(node);
+                }
+
+                if (isBinary(node)) {
+                    visit(node);
+                }
+
+                return node;
+            };
         };
     }
 
@@ -7120,6 +8132,13 @@ parseStatement: true, parseSourceElement: true */
 
         if (extra.range || extra.loc) {
 
+            extra.parseGroupExpression = parseGroupExpression;
+            extra.parseLeftHandSideExpression = parseLeftHandSideExpression;
+            extra.parseLeftHandSideExpressionAllowCall = parseLeftHandSideExpressionAllowCall;
+            parseGroupExpression = trackGroupExpression;
+            parseLeftHandSideExpression = trackLeftHandSideExpression;
+            parseLeftHandSideExpressionAllowCall = trackLeftHandSideExpressionAllowCall;
+
             wrapTracking = wrapTrackingFunction(extra.range, extra.loc);
 
             extra.parseAdditiveExpression = parseAdditiveExpression;
@@ -7129,7 +8148,6 @@ parseStatement: true, parseSourceElement: true */
             extra.parseBitwiseXORExpression = parseBitwiseXORExpression;
             extra.parseBlock = parseBlock;
             extra.parseFunctionSourceElements = parseFunctionSourceElements;
-            extra.parseCallMember = parseCallMember;
             extra.parseCatchClause = parseCatchClause;
             extra.parseComputedMember = parseComputedMember;
             extra.parseConditionalExpression = parseConditionalExpression;
@@ -7143,7 +8161,6 @@ parseStatement: true, parseSourceElement: true */
             extra.parseLogicalORExpression = parseLogicalORExpression;
             extra.parseMultiplicativeExpression = parseMultiplicativeExpression;
             extra.parseNewExpression = parseNewExpression;
-            extra.parseNonComputedMember = parseNonComputedMember;
             extra.parseNonComputedProperty = parseNonComputedProperty;
             extra.parseObjectProperty = parseObjectProperty;
             extra.parseObjectPropertyKey = parseObjectPropertyKey;
@@ -7166,7 +8183,6 @@ parseStatement: true, parseSourceElement: true */
             parseBitwiseXORExpression = wrapTracking(extra.parseBitwiseXORExpression);
             parseBlock = wrapTracking(extra.parseBlock);
             parseFunctionSourceElements = wrapTracking(extra.parseFunctionSourceElements);
-            parseCallMember = wrapTracking(extra.parseCallMember);
             parseCatchClause = wrapTracking(extra.parseCatchClause);
             parseComputedMember = wrapTracking(extra.parseComputedMember);
             parseConditionalExpression = wrapTracking(extra.parseConditionalExpression);
@@ -7176,11 +8192,11 @@ parseStatement: true, parseSourceElement: true */
             parseForVariableDeclaration = wrapTracking(extra.parseForVariableDeclaration);
             parseFunctionDeclaration = wrapTracking(extra.parseFunctionDeclaration);
             parseFunctionExpression = wrapTracking(extra.parseFunctionExpression);
+            parseLeftHandSideExpression = wrapTracking(parseLeftHandSideExpression);
             parseLogicalANDExpression = wrapTracking(extra.parseLogicalANDExpression);
             parseLogicalORExpression = wrapTracking(extra.parseLogicalORExpression);
             parseMultiplicativeExpression = wrapTracking(extra.parseMultiplicativeExpression);
             parseNewExpression = wrapTracking(extra.parseNewExpression);
-            parseNonComputedMember = wrapTracking(extra.parseNonComputedMember);
             parseNonComputedProperty = wrapTracking(extra.parseNonComputedProperty);
             parseObjectProperty = wrapTracking(extra.parseObjectProperty);
             parseObjectPropertyKey = wrapTracking(extra.parseObjectPropertyKey);
@@ -7223,7 +8239,6 @@ parseStatement: true, parseSourceElement: true */
             parseBitwiseXORExpression = extra.parseBitwiseXORExpression;
             parseBlock = extra.parseBlock;
             parseFunctionSourceElements = extra.parseFunctionSourceElements;
-            parseCallMember = extra.parseCallMember;
             parseCatchClause = extra.parseCatchClause;
             parseComputedMember = extra.parseComputedMember;
             parseConditionalExpression = extra.parseConditionalExpression;
@@ -7233,11 +8248,13 @@ parseStatement: true, parseSourceElement: true */
             parseForVariableDeclaration = extra.parseForVariableDeclaration;
             parseFunctionDeclaration = extra.parseFunctionDeclaration;
             parseFunctionExpression = extra.parseFunctionExpression;
+            parseGroupExpression = extra.parseGroupExpression;
+            parseLeftHandSideExpression = extra.parseLeftHandSideExpression;
+            parseLeftHandSideExpressionAllowCall = extra.parseLeftHandSideExpressionAllowCall;
             parseLogicalANDExpression = extra.parseLogicalANDExpression;
             parseLogicalORExpression = extra.parseLogicalORExpression;
             parseMultiplicativeExpression = extra.parseMultiplicativeExpression;
             parseNewExpression = extra.parseNewExpression;
-            parseNonComputedMember = extra.parseNonComputedMember;
             parseNonComputedProperty = extra.parseNonComputedProperty;
             parseObjectProperty = extra.parseObjectProperty;
             parseObjectPropertyKey = extra.parseObjectPropertyKey;
@@ -7287,7 +8304,6 @@ parseStatement: true, parseSourceElement: true */
         state = {
             allowIn: true,
             labelSet: {},
-            lastParenthesized: null,
             inFunctionBody: false,
             inIteration: false,
             inSwitch: false
@@ -7329,13 +8345,18 @@ parseStatement: true, parseSourceElement: true */
         try {
             program = parseProgram();
             if (typeof extra.comments !== 'undefined') {
+                filterCommentLocation();
                 program.comments = extra.comments;
             }
             if (typeof extra.tokens !== 'undefined') {
+                filterTokenLocation();
                 program.tokens = extra.tokens;
             }
             if (typeof extra.errors !== 'undefined') {
                 program.errors = extra.errors;
+            }
+            if (extra.range || extra.loc) {
+                program.body = filterGroup(program.body);
             }
         } catch (e) {
             throw e;
@@ -7348,7 +8369,7 @@ parseStatement: true, parseSourceElement: true */
     }
 
     // Sync with package.json.
-    exports.version = '1.0.0-dev';
+    exports.version = '1.0.4';
 
     exports.parse = parse;
 
@@ -7373,10 +8394,30 @@ parseStatement: true, parseSourceElement: true */
         return types;
     }());
 
-}(typeof exports === 'undefined' ? (esprima = {}) : exports));
+}));
 /* vim: set sw=4 ts=4 et tw=80 : */
+/**
+ * @license Copyright (c) 2012-2014, The Dojo Foundation All Rights Reserved.
+ * Available via the MIT or new BSD license.
+ * see: http://github.com/jrburke/requirejs for details
+ */
 
-});define('uglifyjs/consolidator', ["require", "exports", "module", "./parse-js", "./process"], function(require, exports, module) {
+/*global define, Reflect */
+
+/*
+ * xpcshell has a smaller stack on linux and windows (1MB vs 9MB on mac),
+ * and the recursive nature of esprima can cause it to overflow pretty
+ * quickly. So favor it built in Reflect parser:
+ * https://developer.mozilla.org/en-US/docs/SpiderMonkey/Parser_API
+ */
+define('esprimaAdapter', ['./esprima', 'env'], function (esprima, env) {
+    if (env.get() === 'xpconnect' && typeof Reflect !== 'undefined') {
+        return Reflect;
+    } else {
+        return esprima;
+    }
+});
+define('uglifyjs/consolidator', ["require", "exports", "module", "./parse-js", "./process"], function(require, exports, module) {
 /**
  * @preserve Copyright 2012 Robert Gust-Bardon <http://robert.gust-bardon.org/>.
  * All rights reserved.
@@ -12194,6 +13235,8 @@ module.exports = uglify
 
 define('source-map/array-set', function (require, exports, module) {
 
+  var util = require('./util');
+
   /**
    * A data structure which is a combination of an array and a set. Adding a new
    * member is O(1), testing for membership is O(1), and finding the index of an
@@ -12208,25 +13251,12 @@ define('source-map/array-set', function (require, exports, module) {
   /**
    * Static method for creating ArraySet instances from an existing array.
    */
-  ArraySet.fromArray = function ArraySet_fromArray(aArray) {
+  ArraySet.fromArray = function ArraySet_fromArray(aArray, aAllowDuplicates) {
     var set = new ArraySet();
     for (var i = 0, len = aArray.length; i < len; i++) {
-      set.add(aArray[i]);
+      set.add(aArray[i], aAllowDuplicates);
     }
     return set;
-  };
-
-  /**
-   * Because behavior goes wacky when you set `__proto__` on `this._set`, we
-   * have to prefix all the strings in our set with an arbitrary character.
-   *
-   * See https://github.com/mozilla/source-map/pull/31 and
-   * https://github.com/mozilla/source-map/issues/30
-   *
-   * @param String aStr
-   */
-  ArraySet.prototype._toSetString = function ArraySet__toSetString (aStr) {
-    return "$" + aStr;
   };
 
   /**
@@ -12234,14 +13264,15 @@ define('source-map/array-set', function (require, exports, module) {
    *
    * @param String aStr
    */
-  ArraySet.prototype.add = function ArraySet_add(aStr) {
-    if (this.has(aStr)) {
-      // Already a member; nothing to do.
-      return;
-    }
+  ArraySet.prototype.add = function ArraySet_add(aStr, aAllowDuplicates) {
+    var isDuplicate = this.has(aStr);
     var idx = this._array.length;
-    this._array.push(aStr);
-    this._set[this._toSetString(aStr)] = idx;
+    if (!isDuplicate || aAllowDuplicates) {
+      this._array.push(aStr);
+    }
+    if (!isDuplicate) {
+      this._set[util.toSetString(aStr)] = idx;
+    }
   };
 
   /**
@@ -12251,7 +13282,7 @@ define('source-map/array-set', function (require, exports, module) {
    */
   ArraySet.prototype.has = function ArraySet_has(aStr) {
     return Object.prototype.hasOwnProperty.call(this._set,
-                                                this._toSetString(aStr));
+                                                util.toSetString(aStr));
   };
 
   /**
@@ -12261,7 +13292,7 @@ define('source-map/array-set', function (require, exports, module) {
    */
   ArraySet.prototype.indexOf = function ArraySet_indexOf(aStr) {
     if (this.has(aStr)) {
-      return this._set[this._toSetString(aStr)];
+      return this._set[util.toSetString(aStr)];
     }
     throw new Error('"' + aStr + '" is not in the set.');
   };
@@ -12502,7 +13533,7 @@ define('source-map/binary-search', function (require, exports, module) {
     //      element which is less than the one we are searching for, so we
     //      return null.
     var mid = Math.floor((aHigh - aLow) / 2) + aLow;
-    var cmp = aCompare(aNeedle, aHaystack[mid]);
+    var cmp = aCompare(aNeedle, aHaystack[mid], true);
     if (cmp === 0) {
       // Found the element we are looking for.
       return aHaystack[mid];
@@ -12578,6 +13609,7 @@ define('source-map/source-map-consumer', function (require, exports, module) {
    *   - sources: An array of URLs to the original source files.
    *   - names: An array of identifiers which can be referrenced by individual mappings.
    *   - sourceRoot: Optional. The URL root from which all sources are relative.
+   *   - sourcesContent: Optional. An array of contents of the original source files.
    *   - mappings: A string of base64 VLQs which contain the actual mappings.
    *   - file: The generated file this source map is associated with.
    *
@@ -12602,47 +13634,58 @@ define('source-map/source-map-consumer', function (require, exports, module) {
 
     var version = util.getArg(sourceMap, 'version');
     var sources = util.getArg(sourceMap, 'sources');
-    var names = util.getArg(sourceMap, 'names');
+    // Sass 3.3 leaves out the 'names' array, so we deviate from the spec (which
+    // requires the array) to play nice here.
+    var names = util.getArg(sourceMap, 'names', []);
     var sourceRoot = util.getArg(sourceMap, 'sourceRoot', null);
+    var sourcesContent = util.getArg(sourceMap, 'sourcesContent', null);
     var mappings = util.getArg(sourceMap, 'mappings');
-    var file = util.getArg(sourceMap, 'file');
+    var file = util.getArg(sourceMap, 'file', null);
 
-    if (version !== this._version) {
+    // Once again, Sass deviates from the spec and supplies the version as a
+    // string rather than a number, so we use loose equality checking here.
+    if (version != this._version) {
       throw new Error('Unsupported version: ' + version);
     }
 
-    this._names = ArraySet.fromArray(names);
-    this._sources = ArraySet.fromArray(sources);
-    this._sourceRoot = sourceRoot;
-    this.file = file;
+    // Pass `true` below to allow duplicate names and sources. While source maps
+    // are intended to be compressed and deduplicated, the TypeScript compiler
+    // sometimes generates source maps with duplicates in them. See Github issue
+    // #72 and bugzil.la/889492.
+    this._names = ArraySet.fromArray(names, true);
+    this._sources = ArraySet.fromArray(sources, true);
 
-    // `this._generatedMappings` and `this._originalMappings` hold the parsed
-    // mapping coordinates from the source map's "mappings" attribute. Each
-    // object in the array is of the form
-    //
-    //     {
-    //       generatedLine: The line number in the generated code,
-    //       generatedColumn: The column number in the generated code,
-    //       source: The path to the original source file that generated this
-    //               chunk of code,
-    //       originalLine: The line number in the original source that
-    //                     corresponds to this chunk of generated code,
-    //       originalColumn: The column number in the original source that
-    //                       corresponds to this chunk of generated code,
-    //       name: The name of the original symbol which generated this chunk of
-    //             code.
-    //     }
-    //
-    // All properties except for `generatedLine` and `generatedColumn` can be
-    // `null`.
-    //
-    // `this._generatedMappings` is ordered by the generated positions.
-    //
-    // `this._originalMappings` is ordered by the original positions.
-    this._generatedMappings = [];
-    this._originalMappings = [];
-    this._parseMappings(mappings, sourceRoot);
+    this.sourceRoot = sourceRoot;
+    this.sourcesContent = sourcesContent;
+    this._mappings = mappings;
+    this.file = file;
   }
+
+  /**
+   * Create a SourceMapConsumer from a SourceMapGenerator.
+   *
+   * @param SourceMapGenerator aSourceMap
+   *        The source map that will be consumed.
+   * @returns SourceMapConsumer
+   */
+  SourceMapConsumer.fromSourceMap =
+    function SourceMapConsumer_fromSourceMap(aSourceMap) {
+      var smc = Object.create(SourceMapConsumer.prototype);
+
+      smc._names = ArraySet.fromArray(aSourceMap._names.toArray(), true);
+      smc._sources = ArraySet.fromArray(aSourceMap._sources.toArray(), true);
+      smc.sourceRoot = aSourceMap._sourceRoot;
+      smc.sourcesContent = aSourceMap._generateSourcesContent(smc._sources.toArray(),
+                                                              smc.sourceRoot);
+      smc.file = aSourceMap._file;
+
+      smc.__generatedMappings = aSourceMap._mappings.slice()
+        .sort(util.compareByGeneratedPositions);
+      smc.__originalMappings = aSourceMap._mappings.slice()
+        .sort(util.compareByOriginalPositions);
+
+      return smc;
+    };
 
   /**
    * The version of the source mapping spec that we are consuming.
@@ -12655,14 +13698,71 @@ define('source-map/source-map-consumer', function (require, exports, module) {
   Object.defineProperty(SourceMapConsumer.prototype, 'sources', {
     get: function () {
       return this._sources.toArray().map(function (s) {
-        return this._sourceRoot ? util.join(this._sourceRoot, s) : s;
+        return this.sourceRoot ? util.join(this.sourceRoot, s) : s;
       }, this);
+    }
+  });
+
+  // `__generatedMappings` and `__originalMappings` are arrays that hold the
+  // parsed mapping coordinates from the source map's "mappings" attribute. They
+  // are lazily instantiated, accessed via the `_generatedMappings` and
+  // `_originalMappings` getters respectively, and we only parse the mappings
+  // and create these arrays once queried for a source location. We jump through
+  // these hoops because there can be many thousands of mappings, and parsing
+  // them is expensive, so we only want to do it if we must.
+  //
+  // Each object in the arrays is of the form:
+  //
+  //     {
+  //       generatedLine: The line number in the generated code,
+  //       generatedColumn: The column number in the generated code,
+  //       source: The path to the original source file that generated this
+  //               chunk of code,
+  //       originalLine: The line number in the original source that
+  //                     corresponds to this chunk of generated code,
+  //       originalColumn: The column number in the original source that
+  //                       corresponds to this chunk of generated code,
+  //       name: The name of the original symbol which generated this chunk of
+  //             code.
+  //     }
+  //
+  // All properties except for `generatedLine` and `generatedColumn` can be
+  // `null`.
+  //
+  // `_generatedMappings` is ordered by the generated positions.
+  //
+  // `_originalMappings` is ordered by the original positions.
+
+  SourceMapConsumer.prototype.__generatedMappings = null;
+  Object.defineProperty(SourceMapConsumer.prototype, '_generatedMappings', {
+    get: function () {
+      if (!this.__generatedMappings) {
+        this.__generatedMappings = [];
+        this.__originalMappings = [];
+        this._parseMappings(this._mappings, this.sourceRoot);
+      }
+
+      return this.__generatedMappings;
+    }
+  });
+
+  SourceMapConsumer.prototype.__originalMappings = null;
+  Object.defineProperty(SourceMapConsumer.prototype, '_originalMappings', {
+    get: function () {
+      if (!this.__originalMappings) {
+        this.__generatedMappings = [];
+        this.__originalMappings = [];
+        this._parseMappings(this._mappings, this.sourceRoot);
+      }
+
+      return this.__originalMappings;
     }
   });
 
   /**
    * Parse the mappings in a string in to a data structure which we can easily
-   * query (an ordered list in this._generatedMappings).
+   * query (the ordered arrays in the `this.__generatedMappings` and
+   * `this.__originalMappings` properties).
    */
   SourceMapConsumer.prototype._parseMappings =
     function SourceMapConsumer_parseMappings(aStr, aSourceRoot) {
@@ -12699,12 +13799,7 @@ define('source-map/source-map-consumer', function (require, exports, module) {
           if (str.length > 0 && !mappingSeparator.test(str.charAt(0))) {
             // Original source.
             temp = base64VLQ.decode(str);
-            if (aSourceRoot) {
-              mapping.source = util.join(aSourceRoot, this._sources.at(previousSource + temp.value));
-            }
-            else {
-              mapping.source = this._sources.at(previousSource + temp.value);
-            }
+            mapping.source = this._sources.at(previousSource + temp.value);
             previousSource += temp.value;
             str = temp.rest;
             if (str.length === 0 || mappingSeparator.test(str.charAt(0))) {
@@ -12737,42 +13832,15 @@ define('source-map/source-map-consumer', function (require, exports, module) {
             }
           }
 
-          this._generatedMappings.push(mapping);
-          this._originalMappings.push(mapping);
+          this.__generatedMappings.push(mapping);
+          if (typeof mapping.originalLine === 'number') {
+            this.__originalMappings.push(mapping);
+          }
         }
       }
 
-      this._originalMappings.sort(this._compareOriginalPositions);
-    };
-
-  /**
-   * Comparator between two mappings where the original positions are compared.
-   */
-  SourceMapConsumer.prototype._compareOriginalPositions =
-    function SourceMapConsumer_compareOriginalPositions(mappingA, mappingB) {
-      if (mappingA.source > mappingB.source) {
-        return 1;
-      }
-      else if (mappingA.source < mappingB.source) {
-        return -1;
-      }
-      else {
-        var cmp = mappingA.originalLine - mappingB.originalLine;
-        return cmp === 0
-          ? mappingA.originalColumn - mappingB.originalColumn
-          : cmp;
-      }
-    };
-
-  /**
-   * Comparator between two mappings where the generated positions are compared.
-   */
-  SourceMapConsumer.prototype._compareGeneratedPositions =
-    function SourceMapConsumer_compareGeneratedPositions(mappingA, mappingB) {
-      var cmp = mappingA.generatedLine - mappingB.generatedLine;
-      return cmp === 0
-        ? mappingA.generatedColumn - mappingB.generatedColumn
-        : cmp;
+      this.__generatedMappings.sort(util.compareByGeneratedPositions);
+      this.__originalMappings.sort(util.compareByOriginalPositions);
     };
 
   /**
@@ -12825,11 +13893,15 @@ define('source-map/source-map-consumer', function (require, exports, module) {
                                       this._generatedMappings,
                                       "generatedLine",
                                       "generatedColumn",
-                                      this._compareGeneratedPositions)
+                                      util.compareByGeneratedPositions);
 
       if (mapping) {
+        var source = util.getArg(mapping, 'source', null);
+        if (source && this.sourceRoot) {
+          source = util.join(this.sourceRoot, source);
+        }
         return {
-          source: util.getArg(mapping, 'source', null),
+          source: source,
           line: util.getArg(mapping, 'originalLine', null),
           column: util.getArg(mapping, 'originalColumn', null),
           name: util.getArg(mapping, 'name', null)
@@ -12842,6 +13914,47 @@ define('source-map/source-map-consumer', function (require, exports, module) {
         column: null,
         name: null
       };
+    };
+
+  /**
+   * Returns the original source content. The only argument is the url of the
+   * original source file. Returns null if no original source content is
+   * availible.
+   */
+  SourceMapConsumer.prototype.sourceContentFor =
+    function SourceMapConsumer_sourceContentFor(aSource) {
+      if (!this.sourcesContent) {
+        return null;
+      }
+
+      if (this.sourceRoot) {
+        aSource = util.relative(this.sourceRoot, aSource);
+      }
+
+      if (this._sources.has(aSource)) {
+        return this.sourcesContent[this._sources.indexOf(aSource)];
+      }
+
+      var url;
+      if (this.sourceRoot
+          && (url = util.urlParse(this.sourceRoot))) {
+        // XXX: file:// URIs and absolute paths lead to unexpected behavior for
+        // many users. We can help them out when they expect file:// URIs to
+        // behave like it would if they were running a local HTTP server. See
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=885597.
+        var fileUriAbsPath = aSource.replace(/^file:\/\//, "");
+        if (url.scheme == "file"
+            && this._sources.has(fileUriAbsPath)) {
+          return this.sourcesContent[this._sources.indexOf(fileUriAbsPath)]
+        }
+
+        if ((!url.path || url.path == "/")
+            && this._sources.has("/" + aSource)) {
+          return this.sourcesContent[this._sources.indexOf("/" + aSource)];
+        }
+      }
+
+      throw new Error('"' + aSource + '" is not in the SourceMap.');
     };
 
   /**
@@ -12866,11 +13979,15 @@ define('source-map/source-map-consumer', function (require, exports, module) {
         originalColumn: util.getArg(aArgs, 'column')
       };
 
+      if (this.sourceRoot) {
+        needle.source = util.relative(this.sourceRoot, needle.source);
+      }
+
       var mapping = this._findMapping(needle,
                                       this._originalMappings,
                                       "originalLine",
                                       "originalColumn",
-                                      this._compareOriginalPositions)
+                                      util.compareByOriginalPositions);
 
       if (mapping) {
         return {
@@ -12883,6 +14000,59 @@ define('source-map/source-map-consumer', function (require, exports, module) {
         line: null,
         column: null
       };
+    };
+
+  SourceMapConsumer.GENERATED_ORDER = 1;
+  SourceMapConsumer.ORIGINAL_ORDER = 2;
+
+  /**
+   * Iterate over each mapping between an original source/line/column and a
+   * generated line/column in this source map.
+   *
+   * @param Function aCallback
+   *        The function that is called with each mapping.
+   * @param Object aContext
+   *        Optional. If specified, this object will be the value of `this` every
+   *        time that `aCallback` is called.
+   * @param aOrder
+   *        Either `SourceMapConsumer.GENERATED_ORDER` or
+   *        `SourceMapConsumer.ORIGINAL_ORDER`. Specifies whether you want to
+   *        iterate over the mappings sorted by the generated file's line/column
+   *        order or the original's source/line/column order, respectively. Defaults to
+   *        `SourceMapConsumer.GENERATED_ORDER`.
+   */
+  SourceMapConsumer.prototype.eachMapping =
+    function SourceMapConsumer_eachMapping(aCallback, aContext, aOrder) {
+      var context = aContext || null;
+      var order = aOrder || SourceMapConsumer.GENERATED_ORDER;
+
+      var mappings;
+      switch (order) {
+      case SourceMapConsumer.GENERATED_ORDER:
+        mappings = this._generatedMappings;
+        break;
+      case SourceMapConsumer.ORIGINAL_ORDER:
+        mappings = this._originalMappings;
+        break;
+      default:
+        throw new Error("Unknown order of iteration.");
+      }
+
+      var sourceRoot = this.sourceRoot;
+      mappings.map(function (mapping) {
+        var source = mapping.source;
+        if (source && sourceRoot) {
+          source = util.join(sourceRoot, source);
+        }
+        return {
+          source: source,
+          generatedLine: mapping.generatedLine,
+          generatedColumn: mapping.generatedColumn,
+          originalLine: mapping.originalLine,
+          originalColumn: mapping.originalColumn,
+          name: mapping.name
+        };
+      }).forEach(aCallback, context);
     };
 
   exports.SourceMapConsumer = SourceMapConsumer;
@@ -12915,9 +14085,57 @@ define('source-map/source-map-generator', function (require, exports, module) {
     this._sources = new ArraySet();
     this._names = new ArraySet();
     this._mappings = [];
+    this._sourcesContents = null;
   }
 
   SourceMapGenerator.prototype._version = 3;
+
+  /**
+   * Creates a new SourceMapGenerator based on a SourceMapConsumer
+   *
+   * @param aSourceMapConsumer The SourceMap.
+   */
+  SourceMapGenerator.fromSourceMap =
+    function SourceMapGenerator_fromSourceMap(aSourceMapConsumer) {
+      var sourceRoot = aSourceMapConsumer.sourceRoot;
+      var generator = new SourceMapGenerator({
+        file: aSourceMapConsumer.file,
+        sourceRoot: sourceRoot
+      });
+      aSourceMapConsumer.eachMapping(function (mapping) {
+        var newMapping = {
+          generated: {
+            line: mapping.generatedLine,
+            column: mapping.generatedColumn
+          }
+        };
+
+        if (mapping.source) {
+          newMapping.source = mapping.source;
+          if (sourceRoot) {
+            newMapping.source = util.relative(sourceRoot, newMapping.source);
+          }
+
+          newMapping.original = {
+            line: mapping.originalLine,
+            column: mapping.originalColumn
+          };
+
+          if (mapping.name) {
+            newMapping.name = mapping.name;
+          }
+        }
+
+        generator.addMapping(newMapping);
+      });
+      aSourceMapConsumer.sources.forEach(function (sourceFile) {
+        var content = aSourceMapConsumer.sourceContentFor(sourceFile);
+        if (content) {
+          generator.setSourceContent(sourceFile, content);
+        }
+      });
+      return generator;
+    };
 
   /**
    * Add a single mapping from original source line and column to the generated
@@ -12947,11 +14165,117 @@ define('source-map/source-map-generator', function (require, exports, module) {
       }
 
       this._mappings.push({
-        generated: generated,
-        original: original,
+        generatedLine: generated.line,
+        generatedColumn: generated.column,
+        originalLine: original != null && original.line,
+        originalColumn: original != null && original.column,
         source: source,
         name: name
       });
+    };
+
+  /**
+   * Set the source content for a source file.
+   */
+  SourceMapGenerator.prototype.setSourceContent =
+    function SourceMapGenerator_setSourceContent(aSourceFile, aSourceContent) {
+      var source = aSourceFile;
+      if (this._sourceRoot) {
+        source = util.relative(this._sourceRoot, source);
+      }
+
+      if (aSourceContent !== null) {
+        // Add the source content to the _sourcesContents map.
+        // Create a new _sourcesContents map if the property is null.
+        if (!this._sourcesContents) {
+          this._sourcesContents = {};
+        }
+        this._sourcesContents[util.toSetString(source)] = aSourceContent;
+      } else {
+        // Remove the source file from the _sourcesContents map.
+        // If the _sourcesContents map is empty, set the property to null.
+        delete this._sourcesContents[util.toSetString(source)];
+        if (Object.keys(this._sourcesContents).length === 0) {
+          this._sourcesContents = null;
+        }
+      }
+    };
+
+  /**
+   * Applies the mappings of a sub-source-map for a specific source file to the
+   * source map being generated. Each mapping to the supplied source file is
+   * rewritten using the supplied source map. Note: The resolution for the
+   * resulting mappings is the minimium of this map and the supplied map.
+   *
+   * @param aSourceMapConsumer The source map to be applied.
+   * @param aSourceFile Optional. The filename of the source file.
+   *        If omitted, SourceMapConsumer's file property will be used.
+   */
+  SourceMapGenerator.prototype.applySourceMap =
+    function SourceMapGenerator_applySourceMap(aSourceMapConsumer, aSourceFile) {
+      // If aSourceFile is omitted, we will use the file property of the SourceMap
+      if (!aSourceFile) {
+        aSourceFile = aSourceMapConsumer.file;
+      }
+      var sourceRoot = this._sourceRoot;
+      // Make "aSourceFile" relative if an absolute Url is passed.
+      if (sourceRoot) {
+        aSourceFile = util.relative(sourceRoot, aSourceFile);
+      }
+      // Applying the SourceMap can add and remove items from the sources and
+      // the names array.
+      var newSources = new ArraySet();
+      var newNames = new ArraySet();
+
+      // Find mappings for the "aSourceFile"
+      this._mappings.forEach(function (mapping) {
+        if (mapping.source === aSourceFile && mapping.originalLine) {
+          // Check if it can be mapped by the source map, then update the mapping.
+          var original = aSourceMapConsumer.originalPositionFor({
+            line: mapping.originalLine,
+            column: mapping.originalColumn
+          });
+          if (original.source !== null) {
+            // Copy mapping
+            if (sourceRoot) {
+              mapping.source = util.relative(sourceRoot, original.source);
+            } else {
+              mapping.source = original.source;
+            }
+            mapping.originalLine = original.line;
+            mapping.originalColumn = original.column;
+            if (original.name !== null && mapping.name !== null) {
+              // Only use the identifier name if it's an identifier
+              // in both SourceMaps
+              mapping.name = original.name;
+            }
+          }
+        }
+
+        var source = mapping.source;
+        if (source && !newSources.has(source)) {
+          newSources.add(source);
+        }
+
+        var name = mapping.name;
+        if (name && !newNames.has(name)) {
+          newNames.add(name);
+        }
+
+      }, this);
+      this._sources = newSources;
+      this._names = newNames;
+
+      // Copy sourcesContents of applied map.
+      aSourceMapConsumer.sources.forEach(function (sourceFile) {
+        var content = aSourceMapConsumer.sourceContentFor(sourceFile);
+        if (content) {
+          if (sourceRoot) {
+            sourceFile = util.relative(sourceRoot, sourceFile);
+          }
+          this.setSourceContent(sourceFile, content);
+        }
+      }, this);
     };
 
   /**
@@ -12983,7 +14307,12 @@ define('source-map/source-map-generator', function (require, exports, module) {
         return;
       }
       else {
-        throw new Error('Invalid mapping.');
+        throw new Error('Invalid mapping: ' + JSON.stringify({
+          generated: aGenerated,
+          source: aSource,
+          original: aOriginal,
+          name: aName
+        }));
       }
     };
 
@@ -13002,51 +14331,49 @@ define('source-map/source-map-generator', function (require, exports, module) {
       var result = '';
       var mapping;
 
-      // The mappings must be guarenteed to be in sorted order before we start
+      // The mappings must be guaranteed to be in sorted order before we start
       // serializing them or else the generated line numbers (which are defined
       // via the ';' separators) will be all messed up. Note: it might be more
       // performant to maintain the sorting as we insert them, rather than as we
       // serialize them, but the big O is the same either way.
-      this._mappings.sort(function (mappingA, mappingB) {
-        var cmp = mappingA.generated.line - mappingB.generated.line;
-        return cmp === 0
-          ? mappingA.generated.column - mappingB.generated.column
-          : cmp;
-      });
+      this._mappings.sort(util.compareByGeneratedPositions);
 
       for (var i = 0, len = this._mappings.length; i < len; i++) {
         mapping = this._mappings[i];
 
-        if (mapping.generated.line !== previousGeneratedLine) {
+        if (mapping.generatedLine !== previousGeneratedLine) {
           previousGeneratedColumn = 0;
-          while (mapping.generated.line !== previousGeneratedLine) {
+          while (mapping.generatedLine !== previousGeneratedLine) {
             result += ';';
             previousGeneratedLine++;
           }
         }
         else {
           if (i > 0) {
+            if (!util.compareByGeneratedPositions(mapping, this._mappings[i - 1])) {
+              continue;
+            }
             result += ',';
           }
         }
 
-        result += base64VLQ.encode(mapping.generated.column
+        result += base64VLQ.encode(mapping.generatedColumn
                                    - previousGeneratedColumn);
-        previousGeneratedColumn = mapping.generated.column;
+        previousGeneratedColumn = mapping.generatedColumn;
 
-        if (mapping.source && mapping.original) {
+        if (mapping.source) {
           result += base64VLQ.encode(this._sources.indexOf(mapping.source)
                                      - previousSource);
           previousSource = this._sources.indexOf(mapping.source);
 
           // lines are stored 0-based in SourceMap spec version 3
-          result += base64VLQ.encode(mapping.original.line - 1
+          result += base64VLQ.encode(mapping.originalLine - 1
                                      - previousOriginalLine);
-          previousOriginalLine = mapping.original.line - 1;
+          previousOriginalLine = mapping.originalLine - 1;
 
-          result += base64VLQ.encode(mapping.original.column
+          result += base64VLQ.encode(mapping.originalColumn
                                      - previousOriginalColumn);
-          previousOriginalColumn = mapping.original.column;
+          previousOriginalColumn = mapping.originalColumn;
 
           if (mapping.name) {
             result += base64VLQ.encode(this._names.indexOf(mapping.name)
@@ -13057,6 +14384,23 @@ define('source-map/source-map-generator', function (require, exports, module) {
       }
 
       return result;
+    };
+
+  SourceMapGenerator.prototype._generateSourcesContent =
+    function SourceMapGenerator_generateSourcesContent(aSources, aSourceRoot) {
+      return aSources.map(function (source) {
+        if (!this._sourcesContents) {
+          return null;
+        }
+        if (aSourceRoot) {
+          source = util.relative(aSourceRoot, source);
+        }
+        var key = util.toSetString(source);
+        return Object.prototype.hasOwnProperty.call(this._sourcesContents,
+                                                    key)
+          ? this._sourcesContents[key]
+          : null;
+      }, this);
     };
 
   /**
@@ -13074,6 +14418,10 @@ define('source-map/source-map-generator', function (require, exports, module) {
       if (this._sourceRoot) {
         map.sourceRoot = this._sourceRoot;
       }
+      if (this._sourcesContents) {
+        map.sourcesContent = this._generateSourcesContent(map.sources, map.sourceRoot);
+      }
+
       return map;
     };
 
@@ -13098,6 +14446,7 @@ define('source-map/source-map-generator', function (require, exports, module) {
 define('source-map/source-node', function (require, exports, module) {
 
   var SourceMapGenerator = require('./source-map-generator').SourceMapGenerator;
+  var util = require('./util');
 
   /**
    * SourceNodes provide a way to abstract over interpolating/concatenating
@@ -13109,14 +14458,120 @@ define('source-map/source-node', function (require, exports, module) {
    * @param aSource The original source's filename.
    * @param aChunks Optional. An array of strings which are snippets of
    *        generated JS, or other SourceNodes.
+   * @param aName The original identifier.
    */
-  function SourceNode(aLine, aColumn, aSource, aChunks) {
+  function SourceNode(aLine, aColumn, aSource, aChunks, aName) {
     this.children = [];
-    this.line = aLine;
-    this.column = aColumn;
-    this.source = aSource;
+    this.sourceContents = {};
+    this.line = aLine === undefined ? null : aLine;
+    this.column = aColumn === undefined ? null : aColumn;
+    this.source = aSource === undefined ? null : aSource;
+    this.name = aName === undefined ? null : aName;
     if (aChunks != null) this.add(aChunks);
   }
+
+  /**
+   * Creates a SourceNode from generated code and a SourceMapConsumer.
+   *
+   * @param aGeneratedCode The generated code
+   * @param aSourceMapConsumer The SourceMap for the generated code
+   */
+  SourceNode.fromStringWithSourceMap =
+    function SourceNode_fromStringWithSourceMap(aGeneratedCode, aSourceMapConsumer) {
+      // The SourceNode we want to fill with the generated code
+      // and the SourceMap
+      var node = new SourceNode();
+
+      // The generated code
+      // Processed fragments are removed from this array.
+      var remainingLines = aGeneratedCode.split('\n');
+
+      // We need to remember the position of "remainingLines"
+      var lastGeneratedLine = 1, lastGeneratedColumn = 0;
+
+      // The generate SourceNodes we need a code range.
+      // To extract it current and last mapping is used.
+      // Here we store the last mapping.
+      var lastMapping = null;
+
+      aSourceMapConsumer.eachMapping(function (mapping) {
+        if (lastMapping === null) {
+          // We add the generated code until the first mapping
+          // to the SourceNode without any mapping.
+          // Each line is added as separate string.
+          while (lastGeneratedLine < mapping.generatedLine) {
+            node.add(remainingLines.shift() + "\n");
+            lastGeneratedLine++;
+          }
+          if (lastGeneratedColumn < mapping.generatedColumn) {
+            var nextLine = remainingLines[0];
+            node.add(nextLine.substr(0, mapping.generatedColumn));
+            remainingLines[0] = nextLine.substr(mapping.generatedColumn);
+            lastGeneratedColumn = mapping.generatedColumn;
+          }
+        } else {
+          // We add the code from "lastMapping" to "mapping":
+          // First check if there is a new line in between.
+          if (lastGeneratedLine < mapping.generatedLine) {
+            var code = "";
+            // Associate full lines with "lastMapping"
+            do {
+              code += remainingLines.shift() + "\n";
+              lastGeneratedLine++;
+              lastGeneratedColumn = 0;
+            } while (lastGeneratedLine < mapping.generatedLine);
+            // When we reached the correct line, we add code until we
+            // reach the correct column too.
+            if (lastGeneratedColumn < mapping.generatedColumn) {
+              var nextLine = remainingLines[0];
+              code += nextLine.substr(0, mapping.generatedColumn);
+              remainingLines[0] = nextLine.substr(mapping.generatedColumn);
+              lastGeneratedColumn = mapping.generatedColumn;
+            }
+            // Create the SourceNode.
+            addMappingWithCode(lastMapping, code);
+          } else {
+            // There is no new line in between.
+            // Associate the code between "lastGeneratedColumn" and
+            // "mapping.generatedColumn" with "lastMapping"
+            var nextLine = remainingLines[0];
+            var code = nextLine.substr(0, mapping.generatedColumn -
+                                          lastGeneratedColumn);
+            remainingLines[0] = nextLine.substr(mapping.generatedColumn -
+                                                lastGeneratedColumn);
+            lastGeneratedColumn = mapping.generatedColumn;
+            addMappingWithCode(lastMapping, code);
+          }
+        }
+        lastMapping = mapping;
+      }, this);
+      // We have processed all mappings.
+      // Associate the remaining code in the current line with "lastMapping"
+      // and add the remaining lines without any mapping
+      addMappingWithCode(lastMapping, remainingLines.join("\n"));
+
+      // Copy sourcesContent into SourceNode
+      aSourceMapConsumer.sources.forEach(function (sourceFile) {
+        var content = aSourceMapConsumer.sourceContentFor(sourceFile);
+        if (content) {
+          node.setSourceContent(sourceFile, content);
+        }
+      });
+
+      return node;
+
+      function addMappingWithCode(mapping, code) {
+        if (mapping === null || mapping.source === undefined) {
+          node.add(code);
+        } else {
+          node.add(new SourceNode(mapping.originalLine,
+                                  mapping.originalColumn,
+                                  mapping.source,
+                                  code,
+                                  mapping.name));
+        }
+      }
+    };
 
   /**
    * Add a chunk of generated JS to this source node.
@@ -13174,16 +14629,21 @@ define('source-map/source-node', function (require, exports, module) {
    * @param aFn The traversal function.
    */
   SourceNode.prototype.walk = function SourceNode_walk(aFn) {
-    this.children.forEach(function (chunk) {
+    var chunk;
+    for (var i = 0, len = this.children.length; i < len; i++) {
+      chunk = this.children[i];
       if (chunk instanceof SourceNode) {
         chunk.walk(aFn);
       }
       else {
         if (chunk !== '') {
-          aFn(chunk, { source: this.source, line: this.line, column: this.column });
+          aFn(chunk, { source: this.source,
+                       line: this.line,
+                       column: this.column,
+                       name: this.name });
         }
       }
-    }, this);
+    }
   };
 
   /**
@@ -13195,7 +14655,7 @@ define('source-map/source-node', function (require, exports, module) {
   SourceNode.prototype.join = function SourceNode_join(aSep) {
     var newChildren;
     var i;
-    var len = this.children.length
+    var len = this.children.length;
     if (len > 0) {
       newChildren = [];
       for (i = 0; i < len-1; i++) {
@@ -13230,6 +14690,38 @@ define('source-map/source-node', function (require, exports, module) {
   };
 
   /**
+   * Set the source content for a source file. This will be added to the SourceMapGenerator
+   * in the sourcesContent field.
+   *
+   * @param aSourceFile The filename of the source file
+   * @param aSourceContent The content of the source file
+   */
+  SourceNode.prototype.setSourceContent =
+    function SourceNode_setSourceContent(aSourceFile, aSourceContent) {
+      this.sourceContents[util.toSetString(aSourceFile)] = aSourceContent;
+    };
+
+  /**
+   * Walk over the tree of SourceNodes. The walking function is called for each
+   * source file content and is passed the filename and source content.
+   *
+   * @param aFn The traversal function.
+   */
+  SourceNode.prototype.walkSourceContents =
+    function SourceNode_walkSourceContents(aFn) {
+      for (var i = 0, len = this.children.length; i < len; i++) {
+        if (this.children[i] instanceof SourceNode) {
+          this.children[i].walkSourceContents(aFn);
+        }
+      }
+
+      var sources = Object.keys(this.sourceContents);
+      for (var i = 0, len = sources.length; i < len; i++) {
+        aFn(util.fromSetString(sources[i]), this.sourceContents[sources[i]]);
+      }
+    };
+
+  /**
    * Return the string representation of this source node. Walks over the tree
    * and concatenates all the various snippets together to one string.
    */
@@ -13252,31 +14744,59 @@ define('source-map/source-node', function (require, exports, module) {
       column: 0
     };
     var map = new SourceMapGenerator(aArgs);
+    var sourceMappingActive = false;
+    var lastOriginalSource = null;
+    var lastOriginalLine = null;
+    var lastOriginalColumn = null;
+    var lastOriginalName = null;
     this.walk(function (chunk, original) {
       generated.code += chunk;
-      if (original.source != null
-          && original.line != null
-          && original.column != null) {
+      if (original.source !== null
+          && original.line !== null
+          && original.column !== null) {
+        if(lastOriginalSource !== original.source
+           || lastOriginalLine !== original.line
+           || lastOriginalColumn !== original.column
+           || lastOriginalName !== original.name) {
+          map.addMapping({
+            source: original.source,
+            original: {
+              line: original.line,
+              column: original.column
+            },
+            generated: {
+              line: generated.line,
+              column: generated.column
+            },
+            name: original.name
+          });
+        }
+        lastOriginalSource = original.source;
+        lastOriginalLine = original.line;
+        lastOriginalColumn = original.column;
+        lastOriginalName = original.name;
+        sourceMappingActive = true;
+      } else if (sourceMappingActive) {
         map.addMapping({
-          source: original.source,
-          original: {
-            line: original.line,
-            column: original.column
-          },
           generated: {
             line: generated.line,
             column: generated.column
           }
         });
+        lastOriginalSource = null;
+        sourceMappingActive = false;
       }
-      chunk.split('').forEach(function (char) {
-        if (char === '\n') {
+      chunk.split('').forEach(function (ch) {
+        if (ch === '\n') {
           generated.line++;
           generated.column = 0;
         } else {
           generated.column++;
         }
       });
+    });
+    this.walkSourceContents(function (sourceFile, sourceContent) {
+      map.setSourceContent(sourceFile, sourceContent);
     });
 
     return { code: generated.code, map: map };
@@ -13315,12 +14835,177 @@ define('source-map/util', function (require, exports, module) {
   }
   exports.getArg = getArg;
 
+  var urlRegexp = /([\w+\-.]+):\/\/((\w+:\w+)@)?([\w.]+)?(:(\d+))?(\S+)?/;
+  var dataUrlRegexp = /^data:.+\,.+/;
+
+  function urlParse(aUrl) {
+    var match = aUrl.match(urlRegexp);
+    if (!match) {
+      return null;
+    }
+    return {
+      scheme: match[1],
+      auth: match[3],
+      host: match[4],
+      port: match[6],
+      path: match[7]
+    };
+  }
+  exports.urlParse = urlParse;
+
+  function urlGenerate(aParsedUrl) {
+    var url = aParsedUrl.scheme + "://";
+    if (aParsedUrl.auth) {
+      url += aParsedUrl.auth + "@"
+    }
+    if (aParsedUrl.host) {
+      url += aParsedUrl.host;
+    }
+    if (aParsedUrl.port) {
+      url += ":" + aParsedUrl.port
+    }
+    if (aParsedUrl.path) {
+      url += aParsedUrl.path;
+    }
+    return url;
+  }
+  exports.urlGenerate = urlGenerate;
+
   function join(aRoot, aPath) {
-    return aPath.charAt(0) === '/'
-      ? aPath
-      : aRoot.replace(/\/*$/, '') + '/' + aPath;
+    var url;
+
+    if (aPath.match(urlRegexp) || aPath.match(dataUrlRegexp)) {
+      return aPath;
+    }
+
+    if (aPath.charAt(0) === '/' && (url = urlParse(aRoot))) {
+      url.path = aPath;
+      return urlGenerate(url);
+    }
+
+    return aRoot.replace(/\/$/, '') + '/' + aPath;
   }
   exports.join = join;
+
+  /**
+   * Because behavior goes wacky when you set `__proto__` on objects, we
+   * have to prefix all the strings in our set with an arbitrary character.
+   *
+   * See https://github.com/mozilla/source-map/pull/31 and
+   * https://github.com/mozilla/source-map/issues/30
+   *
+   * @param String aStr
+   */
+  function toSetString(aStr) {
+    return '$' + aStr;
+  }
+  exports.toSetString = toSetString;
+
+  function fromSetString(aStr) {
+    return aStr.substr(1);
+  }
+  exports.fromSetString = fromSetString;
+
+  function relative(aRoot, aPath) {
+    aRoot = aRoot.replace(/\/$/, '');
+
+    var url = urlParse(aRoot);
+    if (aPath.charAt(0) == "/" && url && url.path == "/") {
+      return aPath.slice(1);
+    }
+
+    return aPath.indexOf(aRoot + '/') === 0
+      ? aPath.substr(aRoot.length + 1)
+      : aPath;
+  }
+  exports.relative = relative;
+
+  function strcmp(aStr1, aStr2) {
+    var s1 = aStr1 || "";
+    var s2 = aStr2 || "";
+    return (s1 > s2) - (s1 < s2);
+  }
+
+  /**
+   * Comparator between two mappings where the original positions are compared.
+   *
+   * Optionally pass in `true` as `onlyCompareGenerated` to consider two
+   * mappings with the same original source/line/column, but different generated
+   * line and column the same. Useful when searching for a mapping with a
+   * stubbed out mapping.
+   */
+  function compareByOriginalPositions(mappingA, mappingB, onlyCompareOriginal) {
+    var cmp;
+
+    cmp = strcmp(mappingA.source, mappingB.source);
+    if (cmp) {
+      return cmp;
+    }
+
+    cmp = mappingA.originalLine - mappingB.originalLine;
+    if (cmp) {
+      return cmp;
+    }
+
+    cmp = mappingA.originalColumn - mappingB.originalColumn;
+    if (cmp || onlyCompareOriginal) {
+      return cmp;
+    }
+
+    cmp = strcmp(mappingA.name, mappingB.name);
+    if (cmp) {
+      return cmp;
+    }
+
+    cmp = mappingA.generatedLine - mappingB.generatedLine;
+    if (cmp) {
+      return cmp;
+    }
+
+    return mappingA.generatedColumn - mappingB.generatedColumn;
+  };
+  exports.compareByOriginalPositions = compareByOriginalPositions;
+
+  /**
+   * Comparator between two mappings where the generated positions are
+   * compared.
+   *
+   * Optionally pass in `true` as `onlyCompareGenerated` to consider two
+   * mappings with the same generated line and column, but different
+   * source/name/original line and column the same. Useful when searching for a
+   * mapping with a stubbed out mapping.
+   */
+  function compareByGeneratedPositions(mappingA, mappingB, onlyCompareGenerated) {
+    var cmp;
+
+    cmp = mappingA.generatedLine - mappingB.generatedLine;
+    if (cmp) {
+      return cmp;
+    }
+
+    cmp = mappingA.generatedColumn - mappingB.generatedColumn;
+    if (cmp || onlyCompareGenerated) {
+      return cmp;
+    }
+
+    cmp = strcmp(mappingA.source, mappingB.source);
+    if (cmp) {
+      return cmp;
+    }
+
+    cmp = mappingA.originalLine - mappingB.originalLine;
+    if (cmp) {
+      return cmp;
+    }
+
+    cmp = mappingA.originalColumn - mappingB.originalColumn;
+    if (cmp) {
+      return cmp;
+    }
+
+    return strcmp(mappingA.name, mappingB.name);
+  };
+  exports.compareByGeneratedPositions = compareByGeneratedPositions;
 
 });
 define('source-map', function (require, exports, module) {
@@ -13338,4579 +15023,5920 @@ exports.SourceNode = require('./source-map/source-node').SourceNode;
 
 //Distributed under the BSD license:
 //Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
-define('uglifyjs2', ['exports', 'source-map', 'logger'], function (exports, MOZ_SourceMap, logger) {
-(function(exports, global) {
-    global["UglifyJS"] = exports;
-    "use strict";
-    function array_to_hash(a) {
-        var ret = Object.create(null);
-        for (var i = 0; i < a.length; ++i) ret[a[i]] = true;
-        return ret;
+define('uglifyjs2', ['exports', 'source-map', 'logger', 'env!env/file'], function (exports, MOZ_SourceMap, logger, rjsFile) {
+
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+function array_to_hash(a) {
+    var ret = Object.create(null);
+    for (var i = 0; i < a.length; ++i)
+        ret[a[i]] = true;
+    return ret;
+};
+
+function slice(a, start) {
+    return Array.prototype.slice.call(a, start || 0);
+};
+
+function characters(str) {
+    return str.split("");
+};
+
+function member(name, array) {
+    for (var i = array.length; --i >= 0;)
+        if (array[i] == name)
+            return true;
+    return false;
+};
+
+function find_if(func, array) {
+    for (var i = 0, n = array.length; i < n; ++i) {
+        if (func(array[i]))
+            return array[i];
     }
-    function slice(a, start) {
-        return Array.prototype.slice.call(a, start || 0);
+};
+
+function repeat_string(str, i) {
+    if (i <= 0) return "";
+    if (i == 1) return str;
+    var d = repeat_string(str, i >> 1);
+    d += d;
+    if (i & 1) d += str;
+    return d;
+};
+
+function DefaultsError(msg, defs) {
+    Error.call(this, msg);
+    this.msg = msg;
+    this.defs = defs;
+};
+DefaultsError.prototype = Object.create(Error.prototype);
+DefaultsError.prototype.constructor = DefaultsError;
+
+DefaultsError.croak = function(msg, defs) {
+    throw new DefaultsError(msg, defs);
+};
+
+function defaults(args, defs, croak) {
+    if (args === true)
+        args = {};
+    var ret = args || {};
+    if (croak) for (var i in ret) if (ret.hasOwnProperty(i) && !defs.hasOwnProperty(i))
+        DefaultsError.croak("`" + i + "` is not a supported option", defs);
+    for (var i in defs) if (defs.hasOwnProperty(i)) {
+        ret[i] = (args && args.hasOwnProperty(i)) ? args[i] : defs[i];
     }
-    function characters(str) {
-        return str.split("");
+    return ret;
+};
+
+function merge(obj, ext) {
+    for (var i in ext) if (ext.hasOwnProperty(i)) {
+        obj[i] = ext[i];
     }
-    function member(name, array) {
-        for (var i = array.length; --i >= 0; ) if (array[i] == name) return true;
-        return false;
-    }
-    function find_if(func, array) {
-        for (var i = 0, n = array.length; i < n; ++i) {
-            if (func(array[i])) return array[i];
-        }
-    }
-    function repeat_string(str, i) {
-        if (i <= 0) return "";
-        if (i == 1) return str;
-        var d = repeat_string(str, i >> 1);
-        d += d;
-        if (i & 1) d += str;
-        return d;
-    }
-    function DefaultsError(msg, defs) {
-        this.msg = msg;
-        this.defs = defs;
-    }
-    function defaults(args, defs, croak) {
-        if (args === true) args = {};
-        var ret = args || {};
-        if (croak) for (var i in ret) if (ret.hasOwnProperty(i) && !defs.hasOwnProperty(i)) throw new DefaultsError("`" + i + "` is not a supported option", defs);
-        for (var i in defs) if (defs.hasOwnProperty(i)) {
-            ret[i] = args && args.hasOwnProperty(i) ? args[i] : defs[i];
-        }
-        return ret;
-    }
-    function merge(obj, ext) {
-        for (var i in ext) if (ext.hasOwnProperty(i)) {
-            obj[i] = ext[i];
-        }
-        return obj;
-    }
-    function noop() {}
-    var MAP = function() {
-        function MAP(a, f, backwards) {
-            var ret = [], top = [], i;
-            function doit() {
-                var val = f(a[i], i);
-                var is_last = val instanceof Last;
-                if (is_last) val = val.v;
-                if (val instanceof AtTop) {
-                    val = val.v;
-                    if (val instanceof Splice) {
-                        top.push.apply(top, backwards ? val.v.slice().reverse() : val.v);
-                    } else {
-                        top.push(val);
-                    }
-                } else if (val !== skip) {
-                    if (val instanceof Splice) {
-                        ret.push.apply(ret, backwards ? val.v.slice().reverse() : val.v);
-                    } else {
-                        ret.push(val);
-                    }
-                }
-                return is_last;
-            }
-            if (a instanceof Array) {
-                if (backwards) {
-                    for (i = a.length; --i >= 0; ) if (doit()) break;
-                    ret.reverse();
-                    top.reverse();
+    return obj;
+};
+
+function noop() {};
+
+var MAP = (function(){
+    function MAP(a, f, backwards) {
+        var ret = [], top = [], i;
+        function doit() {
+            var val = f(a[i], i);
+            var is_last = val instanceof Last;
+            if (is_last) val = val.v;
+            if (val instanceof AtTop) {
+                val = val.v;
+                if (val instanceof Splice) {
+                    top.push.apply(top, backwards ? val.v.slice().reverse() : val.v);
                 } else {
-                    for (i = 0; i < a.length; ++i) if (doit()) break;
+                    top.push(val);
                 }
+            }
+            else if (val !== skip) {
+                if (val instanceof Splice) {
+                    ret.push.apply(ret, backwards ? val.v.slice().reverse() : val.v);
+                } else {
+                    ret.push(val);
+                }
+            }
+            return is_last;
+        };
+        if (a instanceof Array) {
+            if (backwards) {
+                for (i = a.length; --i >= 0;) if (doit()) break;
+                ret.reverse();
+                top.reverse();
             } else {
-                for (i in a) if (a.hasOwnProperty(i)) if (doit()) break;
+                for (i = 0; i < a.length; ++i) if (doit()) break;
             }
-            return top.concat(ret);
         }
-        MAP.at_top = function(val) {
-            return new AtTop(val);
-        };
-        MAP.splice = function(val) {
-            return new Splice(val);
-        };
-        MAP.last = function(val) {
-            return new Last(val);
-        };
-        var skip = MAP.skip = {};
-        function AtTop(val) {
-            this.v = val;
+        else {
+            for (i in a) if (a.hasOwnProperty(i)) if (doit()) break;
         }
-        function Splice(val) {
-            this.v = val;
-        }
-        function Last(val) {
-            this.v = val;
-        }
-        return MAP;
-    }();
-    function push_uniq(array, el) {
-        if (array.indexOf(el) < 0) array.push(el);
+        return top.concat(ret);
+    };
+    MAP.at_top = function(val) { return new AtTop(val) };
+    MAP.splice = function(val) { return new Splice(val) };
+    MAP.last = function(val) { return new Last(val) };
+    var skip = MAP.skip = {};
+    function AtTop(val) { this.v = val };
+    function Splice(val) { this.v = val };
+    function Last(val) { this.v = val };
+    return MAP;
+})();
+
+function push_uniq(array, el) {
+    if (array.indexOf(el) < 0)
+        array.push(el);
+};
+
+function string_template(text, props) {
+    return text.replace(/\{(.+?)\}/g, function(str, p){
+        return props[p];
+    });
+};
+
+function remove(array, el) {
+    for (var i = array.length; --i >= 0;) {
+        if (array[i] === el) array.splice(i, 1);
     }
-    function string_template(text, props) {
-        return text.replace(/\{(.+?)\}/g, function(str, p) {
-            return props[p];
-        });
-    }
-    function remove(array, el) {
-        for (var i = array.length; --i >= 0; ) {
-            if (array[i] === el) array.splice(i, 1);
+};
+
+function mergeSort(array, cmp) {
+    if (array.length < 2) return array.slice();
+    function merge(a, b) {
+        var r = [], ai = 0, bi = 0, i = 0;
+        while (ai < a.length && bi < b.length) {
+            cmp(a[ai], b[bi]) <= 0
+                ? r[i++] = a[ai++]
+                : r[i++] = b[bi++];
         }
-    }
-    function mergeSort(array, cmp) {
-        if (array.length < 2) return array.slice();
-        function merge(a, b) {
-            var r = [], ai = 0, bi = 0, i = 0;
-            while (ai < a.length && bi < b.length) {
-                cmp(a[ai], b[bi]) <= 0 ? r[i++] = a[ai++] : r[i++] = b[bi++];
-            }
-            if (ai < a.length) r.push.apply(r, a.slice(ai));
-            if (bi < b.length) r.push.apply(r, b.slice(bi));
-            return r;
-        }
-        function _ms(a) {
-            if (a.length <= 1) return a;
-            var m = Math.floor(a.length / 2), left = a.slice(0, m), right = a.slice(m);
-            left = _ms(left);
-            right = _ms(right);
-            return merge(left, right);
-        }
-        return _ms(array);
-    }
-    function set_difference(a, b) {
-        return a.filter(function(el) {
-            return b.indexOf(el) < 0;
-        });
-    }
-    function set_intersection(a, b) {
-        return a.filter(function(el) {
-            return b.indexOf(el) >= 0;
-        });
-    }
-    function makePredicate(words) {
-        if (!(words instanceof Array)) words = words.split(" ");
-        var f = "", cats = [];
-        out: for (var i = 0; i < words.length; ++i) {
-            for (var j = 0; j < cats.length; ++j) if (cats[j][0].length == words[i].length) {
+        if (ai < a.length) r.push.apply(r, a.slice(ai));
+        if (bi < b.length) r.push.apply(r, b.slice(bi));
+        return r;
+    };
+    function _ms(a) {
+        if (a.length <= 1)
+            return a;
+        var m = Math.floor(a.length / 2), left = a.slice(0, m), right = a.slice(m);
+        left = _ms(left);
+        right = _ms(right);
+        return merge(left, right);
+    };
+    return _ms(array);
+};
+
+function set_difference(a, b) {
+    return a.filter(function(el){
+        return b.indexOf(el) < 0;
+    });
+};
+
+function set_intersection(a, b) {
+    return a.filter(function(el){
+        return b.indexOf(el) >= 0;
+    });
+};
+
+// this function is taken from Acorn [1], written by Marijn Haverbeke
+// [1] https://github.com/marijnh/acorn
+function makePredicate(words) {
+    if (!(words instanceof Array)) words = words.split(" ");
+    var f = "", cats = [];
+    out: for (var i = 0; i < words.length; ++i) {
+        for (var j = 0; j < cats.length; ++j)
+            if (cats[j][0].length == words[i].length) {
                 cats[j].push(words[i]);
                 continue out;
             }
-            cats.push([ words[i] ]);
+        cats.push([words[i]]);
+    }
+    function compareTo(arr) {
+        if (arr.length == 1) return f += "return str === " + JSON.stringify(arr[0]) + ";";
+        f += "switch(str){";
+        for (var i = 0; i < arr.length; ++i) f += "case " + JSON.stringify(arr[i]) + ":";
+        f += "return true}return false;";
+    }
+    // When there are more than three length categories, an outer
+    // switch first dispatches on the lengths, to save on comparisons.
+    if (cats.length > 3) {
+        cats.sort(function(a, b) {return b.length - a.length;});
+        f += "switch(str.length){";
+        for (var i = 0; i < cats.length; ++i) {
+            var cat = cats[i];
+            f += "case " + cat[0].length + ":";
+            compareTo(cat);
         }
-        function compareTo(arr) {
-            if (arr.length == 1) return f += "return str === " + JSON.stringify(arr[0]) + ";";
-            f += "switch(str){";
-            for (var i = 0; i < arr.length; ++i) f += "case " + JSON.stringify(arr[i]) + ":";
-            f += "return true}return false;";
-        }
-        if (cats.length > 3) {
-            cats.sort(function(a, b) {
-                return b.length - a.length;
-            });
-            f += "switch(str.length){";
-            for (var i = 0; i < cats.length; ++i) {
-                var cat = cats[i];
-                f += "case " + cat[0].length + ":";
-                compareTo(cat);
-            }
-            f += "}";
+        f += "}";
+        // Otherwise, simply generate a flat `switch` statement.
+    } else {
+        compareTo(words);
+    }
+    return new Function("str", f);
+};
+
+function all(array, predicate) {
+    for (var i = array.length; --i >= 0;)
+        if (!predicate(array[i]))
+            return false;
+    return true;
+};
+
+function Dictionary() {
+    this._values = Object.create(null);
+    this._size = 0;
+};
+Dictionary.prototype = {
+    set: function(key, val) {
+        if (!this.has(key)) ++this._size;
+        this._values["$" + key] = val;
+        return this;
+    },
+    add: function(key, val) {
+        if (this.has(key)) {
+            this.get(key).push(val);
         } else {
-            compareTo(words);
+            this.set(key, [ val ]);
         }
-        return new Function("str", f);
-    }
-    function Dictionary() {
-        this._values = Object.create(null);
-        this._size = 0;
-    }
-    Dictionary.prototype = {
-        set: function(key, val) {
-            if (!this.has(key)) ++this._size;
-            this._values["$" + key] = val;
-            return this;
-        },
-        get: function(key) {
-            return this._values["$" + key];
-        },
-        del: function(key) {
-            if (this.has(key)) {
-                --this._size;
-                delete this._values["$" + key];
-            }
-            return this;
-        },
-        has: function(key) {
-            return "$" + key in this._values;
-        },
-        each: function(f) {
-            for (var i in this._values) f(this._values[i], i.substr(1));
-        },
-        size: function() {
-            return this._size;
-        },
-        map: function(f) {
-            var ret = [];
-            for (var i in this._values) ret.push(f(this._values[i], i.substr(1)));
-            return ret;
+        return this;
+    },
+    get: function(key) { return this._values["$" + key] },
+    del: function(key) {
+        if (this.has(key)) {
+            --this._size;
+            delete this._values["$" + key];
         }
+        return this;
+    },
+    has: function(key) { return ("$" + key) in this._values },
+    each: function(f) {
+        for (var i in this._values)
+            f(this._values[i], i.substr(1));
+    },
+    size: function() {
+        return this._size;
+    },
+    map: function(f) {
+        var ret = [];
+        for (var i in this._values)
+            ret.push(f(this._values[i], i.substr(1)));
+        return ret;
+    }
+};
+
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+function DEFNODE(type, props, methods, base) {
+    if (arguments.length < 4) base = AST_Node;
+    if (!props) props = [];
+    else props = props.split(/\s+/);
+    var self_props = props;
+    if (base && base.PROPS)
+        props = props.concat(base.PROPS);
+    var code = "return function AST_" + type + "(props){ if (props) { ";
+    for (var i = props.length; --i >= 0;) {
+        code += "this." + props[i] + " = props." + props[i] + ";";
+    }
+    var proto = base && new base;
+    if (proto && proto.initialize || (methods && methods.initialize))
+        code += "this.initialize();";
+    code += "}}";
+    var ctor = new Function(code)();
+    if (proto) {
+        ctor.prototype = proto;
+        ctor.BASE = base;
+    }
+    if (base) base.SUBCLASSES.push(ctor);
+    ctor.prototype.CTOR = ctor;
+    ctor.PROPS = props || null;
+    ctor.SELF_PROPS = self_props;
+    ctor.SUBCLASSES = [];
+    if (type) {
+        ctor.prototype.TYPE = ctor.TYPE = type;
+    }
+    if (methods) for (i in methods) if (methods.hasOwnProperty(i)) {
+        if (/^\$/.test(i)) {
+            ctor[i.substr(1)] = methods[i];
+        } else {
+            ctor.prototype[i] = methods[i];
+        }
+    }
+    ctor.DEFMETHOD = function(name, method) {
+        this.prototype[name] = method;
     };
-    "use strict";
-    function DEFNODE(type, props, methods, base) {
-        if (arguments.length < 4) base = AST_Node;
-        if (!props) props = []; else props = props.split(/\s+/);
-        var self_props = props;
-        if (base && base.PROPS) props = props.concat(base.PROPS);
-        var code = "return function AST_" + type + "(props){ if (props) { ";
-        for (var i = props.length; --i >= 0; ) {
-            code += "this." + props[i] + " = props." + props[i] + ";";
-        }
-        var proto = base && new base();
-        if (proto && proto.initialize || methods && methods.initialize) code += "this.initialize();";
-        code += "}}";
-        var ctor = new Function(code)();
-        if (proto) {
-            ctor.prototype = proto;
-            ctor.BASE = base;
-        }
-        if (base) base.SUBCLASSES.push(ctor);
-        ctor.prototype.CTOR = ctor;
-        ctor.PROPS = props || null;
-        ctor.SELF_PROPS = self_props;
-        ctor.SUBCLASSES = [];
-        if (type) {
-            ctor.prototype.TYPE = ctor.TYPE = type;
-        }
-        if (methods) for (i in methods) if (methods.hasOwnProperty(i)) {
-            if (/^\$/.test(i)) {
-                ctor[i.substr(1)] = methods[i];
-            } else {
-                ctor.prototype[i] = methods[i];
-            }
-        }
-        ctor.DEFMETHOD = function(name, method) {
-            this.prototype[name] = method;
-        };
-        return ctor;
+    return ctor;
+};
+
+var AST_Token = DEFNODE("Token", "type value line col pos endpos nlb comments_before file", {
+}, null);
+
+var AST_Node = DEFNODE("Node", "start end", {
+    clone: function() {
+        return new this.CTOR(this);
+    },
+    $documentation: "Base class of all AST nodes",
+    $propdoc: {
+        start: "[AST_Token] The first token of this node",
+        end: "[AST_Token] The last token of this node"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this);
+    },
+    walk: function(visitor) {
+        return this._walk(visitor); // not sure the indirection will be any help
     }
-    var AST_Token = DEFNODE("Token", "type value line col pos endpos nlb comments_before file", {}, null);
-    var AST_Node = DEFNODE("Node", "start end", {
-        clone: function() {
-            return new this.CTOR(this);
-        },
-        $documentation: "Base class of all AST nodes",
-        $propdoc: {
-            start: "[AST_Token] The first token of this node",
-            end: "[AST_Token] The last token of this node"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this);
-        },
-        walk: function(visitor) {
-            return this._walk(visitor);
-        }
-    }, null);
-    AST_Node.warn_function = null;
-    AST_Node.warn = function(txt, props) {
-        if (AST_Node.warn_function) AST_Node.warn_function(string_template(txt, props));
-    };
-    var AST_Statement = DEFNODE("Statement", null, {
-        $documentation: "Base class of all statements"
-    });
-    var AST_Debugger = DEFNODE("Debugger", null, {
-        $documentation: "Represents a debugger statement"
-    }, AST_Statement);
-    var AST_Directive = DEFNODE("Directive", "value scope", {
-        $documentation: 'Represents a directive, like "use strict";',
-        $propdoc: {
-            value: "[string] The value of this directive as a plain string (it's not an AST_String!)",
-            scope: "[AST_Scope/S] The scope that this directive affects"
-        }
-    }, AST_Statement);
-    var AST_SimpleStatement = DEFNODE("SimpleStatement", "body", {
-        $documentation: "A statement consisting of an expression, i.e. a = 1 + 2",
-        $propdoc: {
-            body: "[AST_Node] an expression node (should not be instanceof AST_Statement)"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.body._walk(visitor);
-            });
-        }
-    }, AST_Statement);
-    function walk_body(node, visitor) {
-        if (node.body instanceof AST_Statement) {
-            node.body._walk(visitor);
-        } else node.body.forEach(function(stat) {
-            stat._walk(visitor);
+}, null);
+
+AST_Node.warn_function = null;
+AST_Node.warn = function(txt, props) {
+    if (AST_Node.warn_function)
+        AST_Node.warn_function(string_template(txt, props));
+};
+
+/* -----[ statements ]----- */
+
+var AST_Statement = DEFNODE("Statement", null, {
+    $documentation: "Base class of all statements",
+});
+
+var AST_Debugger = DEFNODE("Debugger", null, {
+    $documentation: "Represents a debugger statement",
+}, AST_Statement);
+
+var AST_Directive = DEFNODE("Directive", "value scope", {
+    $documentation: "Represents a directive, like \"use strict\";",
+    $propdoc: {
+        value: "[string] The value of this directive as a plain string (it's not an AST_String!)",
+        scope: "[AST_Scope/S] The scope that this directive affects"
+    },
+}, AST_Statement);
+
+var AST_SimpleStatement = DEFNODE("SimpleStatement", "body", {
+    $documentation: "A statement consisting of an expression, i.e. a = 1 + 2",
+    $propdoc: {
+        body: "[AST_Node] an expression node (should not be instanceof AST_Statement)"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.body._walk(visitor);
         });
     }
-    var AST_Block = DEFNODE("Block", "body", {
-        $documentation: "A body of statements (usually bracketed)",
-        $propdoc: {
-            body: "[AST_Statement*] an array of statements"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                walk_body(this, visitor);
-            });
-        }
-    }, AST_Statement);
-    var AST_BlockStatement = DEFNODE("BlockStatement", null, {
-        $documentation: "A block statement"
-    }, AST_Block);
-    var AST_EmptyStatement = DEFNODE("EmptyStatement", null, {
-        $documentation: "The empty statement (empty block or simply a semicolon)",
-        _walk: function(visitor) {
-            return visitor._visit(this);
-        }
-    }, AST_Statement);
-    var AST_StatementWithBody = DEFNODE("StatementWithBody", "body", {
-        $documentation: "Base class for all statements that contain one nested body: `For`, `ForIn`, `Do`, `While`, `With`",
-        $propdoc: {
-            body: "[AST_Statement] the body; this should always be present, even if it's an AST_EmptyStatement"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.body._walk(visitor);
-            });
-        }
-    }, AST_Statement);
-    var AST_LabeledStatement = DEFNODE("LabeledStatement", "label", {
-        $documentation: "Statement with a label",
-        $propdoc: {
-            label: "[AST_Label] a label definition"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.label._walk(visitor);
-                this.body._walk(visitor);
-            });
-        }
-    }, AST_StatementWithBody);
-    var AST_DWLoop = DEFNODE("DWLoop", "condition", {
-        $documentation: "Base class for do/while statements",
-        $propdoc: {
-            condition: "[AST_Node] the loop condition.  Should not be instanceof AST_Statement"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.condition._walk(visitor);
-                this.body._walk(visitor);
-            });
-        }
-    }, AST_StatementWithBody);
-    var AST_Do = DEFNODE("Do", null, {
-        $documentation: "A `do` statement"
-    }, AST_DWLoop);
-    var AST_While = DEFNODE("While", null, {
-        $documentation: "A `while` statement"
-    }, AST_DWLoop);
-    var AST_For = DEFNODE("For", "init condition step", {
-        $documentation: "A `for` statement",
-        $propdoc: {
-            init: "[AST_Node?] the `for` initialization code, or null if empty",
-            condition: "[AST_Node?] the `for` termination clause, or null if empty",
-            step: "[AST_Node?] the `for` update clause, or null if empty"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                if (this.init) this.init._walk(visitor);
-                if (this.condition) this.condition._walk(visitor);
-                if (this.step) this.step._walk(visitor);
-                this.body._walk(visitor);
-            });
-        }
-    }, AST_StatementWithBody);
-    var AST_ForIn = DEFNODE("ForIn", "init name object", {
-        $documentation: "A `for ... in` statement",
-        $propdoc: {
-            init: "[AST_Node] the `for/in` initialization code",
-            name: "[AST_SymbolRef?] the loop variable, only if `init` is AST_Var",
-            object: "[AST_Node] the object that we're looping through"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.init._walk(visitor);
-                this.object._walk(visitor);
-                this.body._walk(visitor);
-            });
-        }
-    }, AST_StatementWithBody);
-    var AST_With = DEFNODE("With", "expression", {
-        $documentation: "A `with` statement",
-        $propdoc: {
-            expression: "[AST_Node] the `with` expression"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.expression._walk(visitor);
-                this.body._walk(visitor);
-            });
-        }
-    }, AST_StatementWithBody);
-    var AST_Scope = DEFNODE("Scope", "directives variables functions uses_with uses_eval parent_scope enclosed cname", {
-        $documentation: "Base class for all statements introducing a lexical scope",
-        $propdoc: {
-            directives: "[string*/S] an array of directives declared in this scope",
-            variables: "[Object/S] a map of name -> SymbolDef for all variables/functions defined in this scope",
-            functions: "[Object/S] like `variables`, but only lists function declarations",
-            uses_with: "[boolean/S] tells whether this scope uses the `with` statement",
-            uses_eval: "[boolean/S] tells whether this scope contains a direct call to the global `eval`",
-            parent_scope: "[AST_Scope?/S] link to the parent scope",
-            enclosed: "[SymbolDef*/S] a list of all symbol definitions that are accessed from this scope or any subscopes",
-            cname: "[integer/S] current index for mangling variables (used internally by the mangler)"
-        }
-    }, AST_Block);
-    var AST_Toplevel = DEFNODE("Toplevel", "globals", {
-        $documentation: "The toplevel scope",
-        $propdoc: {
-            globals: "[Object/S] a map of name -> SymbolDef for all undeclared names"
-        },
-        wrap_commonjs: function(name, export_all) {
-            var self = this;
-            if (export_all) {
-                self.figure_out_scope();
-                var to_export = [];
-                self.walk(new TreeWalker(function(node) {
-                    if (node instanceof AST_SymbolDeclaration && node.definition().global) {
-                        if (!find_if(function(n) {
-                            return n.name == node.name;
-                        }, to_export)) to_export.push(node);
-                    }
-                }));
-            }
-            var wrapped_tl = "(function(exports, global){ global['" + name + "'] = exports; '$ORIG'; '$EXPORTS'; }({}, (function(){return this}())))";
-            wrapped_tl = parse(wrapped_tl);
-            wrapped_tl = wrapped_tl.transform(new TreeTransformer(function before(node) {
-                if (node instanceof AST_SimpleStatement) {
-                    node = node.body;
-                    if (node instanceof AST_String) switch (node.getValue()) {
-                      case "$ORIG":
-                        return MAP.splice(self.body);
+}, AST_Statement);
 
-                      case "$EXPORTS":
-                        var body = [];
-                        to_export.forEach(function(sym) {
-                            body.push(new AST_SimpleStatement({
-                                body: new AST_Assign({
-                                    left: new AST_Sub({
-                                        expression: new AST_SymbolRef({
-                                            name: "exports"
-                                        }),
-                                        property: new AST_String({
-                                            value: sym.name
-                                        })
-                                    }),
-                                    operator: "=",
-                                    right: new AST_SymbolRef(sym)
-                                })
-                            }));
-                        });
-                        return MAP.splice(body);
-                    }
+function walk_body(node, visitor) {
+    if (node.body instanceof AST_Statement) {
+        node.body._walk(visitor);
+    }
+    else node.body.forEach(function(stat){
+        stat._walk(visitor);
+    });
+};
+
+var AST_Block = DEFNODE("Block", "body", {
+    $documentation: "A body of statements (usually bracketed)",
+    $propdoc: {
+        body: "[AST_Statement*] an array of statements"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            walk_body(this, visitor);
+        });
+    }
+}, AST_Statement);
+
+var AST_BlockStatement = DEFNODE("BlockStatement", null, {
+    $documentation: "A block statement",
+}, AST_Block);
+
+var AST_EmptyStatement = DEFNODE("EmptyStatement", null, {
+    $documentation: "The empty statement (empty block or simply a semicolon)",
+    _walk: function(visitor) {
+        return visitor._visit(this);
+    }
+}, AST_Statement);
+
+var AST_StatementWithBody = DEFNODE("StatementWithBody", "body", {
+    $documentation: "Base class for all statements that contain one nested body: `For`, `ForIn`, `Do`, `While`, `With`",
+    $propdoc: {
+        body: "[AST_Statement] the body; this should always be present, even if it's an AST_EmptyStatement"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.body._walk(visitor);
+        });
+    }
+}, AST_Statement);
+
+var AST_LabeledStatement = DEFNODE("LabeledStatement", "label", {
+    $documentation: "Statement with a label",
+    $propdoc: {
+        label: "[AST_Label] a label definition"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.label._walk(visitor);
+            this.body._walk(visitor);
+        });
+    }
+}, AST_StatementWithBody);
+
+var AST_IterationStatement = DEFNODE("IterationStatement", null, {
+    $documentation: "Internal class.  All loops inherit from it."
+}, AST_StatementWithBody);
+
+var AST_DWLoop = DEFNODE("DWLoop", "condition", {
+    $documentation: "Base class for do/while statements",
+    $propdoc: {
+        condition: "[AST_Node] the loop condition.  Should not be instanceof AST_Statement"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.condition._walk(visitor);
+            this.body._walk(visitor);
+        });
+    }
+}, AST_IterationStatement);
+
+var AST_Do = DEFNODE("Do", null, {
+    $documentation: "A `do` statement",
+}, AST_DWLoop);
+
+var AST_While = DEFNODE("While", null, {
+    $documentation: "A `while` statement",
+}, AST_DWLoop);
+
+var AST_For = DEFNODE("For", "init condition step", {
+    $documentation: "A `for` statement",
+    $propdoc: {
+        init: "[AST_Node?] the `for` initialization code, or null if empty",
+        condition: "[AST_Node?] the `for` termination clause, or null if empty",
+        step: "[AST_Node?] the `for` update clause, or null if empty"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            if (this.init) this.init._walk(visitor);
+            if (this.condition) this.condition._walk(visitor);
+            if (this.step) this.step._walk(visitor);
+            this.body._walk(visitor);
+        });
+    }
+}, AST_IterationStatement);
+
+var AST_ForIn = DEFNODE("ForIn", "init name object", {
+    $documentation: "A `for ... in` statement",
+    $propdoc: {
+        init: "[AST_Node] the `for/in` initialization code",
+        name: "[AST_SymbolRef?] the loop variable, only if `init` is AST_Var",
+        object: "[AST_Node] the object that we're looping through"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.init._walk(visitor);
+            this.object._walk(visitor);
+            this.body._walk(visitor);
+        });
+    }
+}, AST_IterationStatement);
+
+var AST_With = DEFNODE("With", "expression", {
+    $documentation: "A `with` statement",
+    $propdoc: {
+        expression: "[AST_Node] the `with` expression"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.expression._walk(visitor);
+            this.body._walk(visitor);
+        });
+    }
+}, AST_StatementWithBody);
+
+/* -----[ scope and functions ]----- */
+
+var AST_Scope = DEFNODE("Scope", "directives variables functions uses_with uses_eval parent_scope enclosed cname", {
+    $documentation: "Base class for all statements introducing a lexical scope",
+    $propdoc: {
+        directives: "[string*/S] an array of directives declared in this scope",
+        variables: "[Object/S] a map of name -> SymbolDef for all variables/functions defined in this scope",
+        functions: "[Object/S] like `variables`, but only lists function declarations",
+        uses_with: "[boolean/S] tells whether this scope uses the `with` statement",
+        uses_eval: "[boolean/S] tells whether this scope contains a direct call to the global `eval`",
+        parent_scope: "[AST_Scope?/S] link to the parent scope",
+        enclosed: "[SymbolDef*/S] a list of all symbol definitions that are accessed from this scope or any subscopes",
+        cname: "[integer/S] current index for mangling variables (used internally by the mangler)",
+    },
+}, AST_Block);
+
+var AST_Toplevel = DEFNODE("Toplevel", "globals", {
+    $documentation: "The toplevel scope",
+    $propdoc: {
+        globals: "[Object/S] a map of name -> SymbolDef for all undeclared names",
+    },
+    wrap_enclose: function(arg_parameter_pairs) {
+        var self = this;
+        var args = [];
+        var parameters = [];
+
+        arg_parameter_pairs.forEach(function(pair) {
+            var split = pair.split(":");
+
+            args.push(split[0]);
+            parameters.push(split[1]);
+        });
+
+        var wrapped_tl = "(function(" + parameters.join(",") + "){ '$ORIG'; })(" + args.join(",") + ")";
+        wrapped_tl = parse(wrapped_tl);
+        wrapped_tl = wrapped_tl.transform(new TreeTransformer(function before(node){
+            if (node instanceof AST_Directive && node.value == "$ORIG") {
+                return MAP.splice(self.body);
+            }
+        }));
+        return wrapped_tl;
+    },
+    wrap_commonjs: function(name, export_all) {
+        var self = this;
+        var to_export = [];
+        if (export_all) {
+            self.figure_out_scope();
+            self.walk(new TreeWalker(function(node){
+                if (node instanceof AST_SymbolDeclaration && node.definition().global) {
+                    if (!find_if(function(n){ return n.name == node.name }, to_export))
+                        to_export.push(node);
                 }
             }));
-            return wrapped_tl;
         }
-    }, AST_Scope);
-    var AST_Lambda = DEFNODE("Lambda", "name argnames uses_arguments", {
-        $documentation: "Base class for functions",
-        $propdoc: {
-            name: "[AST_SymbolDeclaration?] the name of this function",
-            argnames: "[AST_SymbolFunarg*] array of function arguments",
-            uses_arguments: "[boolean/S] tells whether this function accesses the arguments array"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                if (this.name) this.name._walk(visitor);
-                this.argnames.forEach(function(arg) {
-                    arg._walk(visitor);
-                });
-                walk_body(this, visitor);
-            });
-        }
-    }, AST_Scope);
-    var AST_Accessor = DEFNODE("Accessor", null, {
-        $documentation: "A setter/getter function"
-    }, AST_Lambda);
-    var AST_Function = DEFNODE("Function", null, {
-        $documentation: "A function expression"
-    }, AST_Lambda);
-    var AST_Defun = DEFNODE("Defun", null, {
-        $documentation: "A function definition"
-    }, AST_Lambda);
-    var AST_Jump = DEFNODE("Jump", null, {
-        $documentation: "Base class for â€œjumpsâ€ (for now that's `return`, `throw`, `break` and `continue`)"
-    }, AST_Statement);
-    var AST_Exit = DEFNODE("Exit", "value", {
-        $documentation: "Base class for â€œexitsâ€ (`return` and `throw`)",
-        $propdoc: {
-            value: "[AST_Node?] the value returned or thrown by this statement; could be null for AST_Return"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, this.value && function() {
-                this.value._walk(visitor);
-            });
-        }
-    }, AST_Jump);
-    var AST_Return = DEFNODE("Return", null, {
-        $documentation: "A `return` statement"
-    }, AST_Exit);
-    var AST_Throw = DEFNODE("Throw", null, {
-        $documentation: "A `throw` statement"
-    }, AST_Exit);
-    var AST_LoopControl = DEFNODE("LoopControl", "label", {
-        $documentation: "Base class for loop control statements (`break` and `continue`)",
-        $propdoc: {
-            label: "[AST_LabelRef?] the label, or null if none"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, this.label && function() {
-                this.label._walk(visitor);
-            });
-        }
-    }, AST_Jump);
-    var AST_Break = DEFNODE("Break", null, {
-        $documentation: "A `break` statement"
-    }, AST_LoopControl);
-    var AST_Continue = DEFNODE("Continue", null, {
-        $documentation: "A `continue` statement"
-    }, AST_LoopControl);
-    var AST_If = DEFNODE("If", "condition alternative", {
-        $documentation: "A `if` statement",
-        $propdoc: {
-            condition: "[AST_Node] the `if` condition",
-            alternative: "[AST_Statement?] the `else` part, or null if not present"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.condition._walk(visitor);
-                this.body._walk(visitor);
-                if (this.alternative) this.alternative._walk(visitor);
-            });
-        }
-    }, AST_StatementWithBody);
-    var AST_Switch = DEFNODE("Switch", "expression", {
-        $documentation: "A `switch` statement",
-        $propdoc: {
-            expression: "[AST_Node] the `switch` â€œdiscriminantâ€"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.expression._walk(visitor);
-                walk_body(this, visitor);
-            });
-        }
-    }, AST_Block);
-    var AST_SwitchBranch = DEFNODE("SwitchBranch", null, {
-        $documentation: "Base class for `switch` branches"
-    }, AST_Block);
-    var AST_Default = DEFNODE("Default", null, {
-        $documentation: "A `default` switch branch"
-    }, AST_SwitchBranch);
-    var AST_Case = DEFNODE("Case", "expression", {
-        $documentation: "A `case` switch branch",
-        $propdoc: {
-            expression: "[AST_Node] the `case` expression"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.expression._walk(visitor);
-                walk_body(this, visitor);
-            });
-        }
-    }, AST_SwitchBranch);
-    var AST_Try = DEFNODE("Try", "bcatch bfinally", {
-        $documentation: "A `try` statement",
-        $propdoc: {
-            bcatch: "[AST_Catch?] the catch block, or null if not present",
-            bfinally: "[AST_Finally?] the finally block, or null if not present"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                walk_body(this, visitor);
-                if (this.bcatch) this.bcatch._walk(visitor);
-                if (this.bfinally) this.bfinally._walk(visitor);
-            });
-        }
-    }, AST_Block);
-    var AST_Catch = DEFNODE("Catch", "argname", {
-        $documentation: "A `catch` node; only makes sense as part of a `try` statement",
-        $propdoc: {
-            argname: "[AST_SymbolCatch] symbol for the exception"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.argname._walk(visitor);
-                walk_body(this, visitor);
-            });
-        }
-    }, AST_Block);
-    var AST_Finally = DEFNODE("Finally", null, {
-        $documentation: "A `finally` node; only makes sense as part of a `try` statement"
-    }, AST_Block);
-    var AST_Definitions = DEFNODE("Definitions", "definitions", {
-        $documentation: "Base class for `var` or `const` nodes (variable declarations/initializations)",
-        $propdoc: {
-            definitions: "[AST_VarDef*] array of variable definitions"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.definitions.forEach(function(def) {
-                    def._walk(visitor);
-                });
-            });
-        }
-    }, AST_Statement);
-    var AST_Var = DEFNODE("Var", null, {
-        $documentation: "A `var` statement"
-    }, AST_Definitions);
-    var AST_Const = DEFNODE("Const", null, {
-        $documentation: "A `const` statement"
-    }, AST_Definitions);
-    var AST_VarDef = DEFNODE("VarDef", "name value", {
-        $documentation: "A variable declaration; only appears in a AST_Definitions node",
-        $propdoc: {
-            name: "[AST_SymbolVar|AST_SymbolConst] name of the variable",
-            value: "[AST_Node?] initializer, or null of there's no initializer"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.name._walk(visitor);
-                if (this.value) this.value._walk(visitor);
-            });
-        }
-    });
-    var AST_Call = DEFNODE("Call", "expression args", {
-        $documentation: "A function call expression",
-        $propdoc: {
-            expression: "[AST_Node] expression to invoke as function",
-            args: "[AST_Node*] array of arguments"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.expression._walk(visitor);
-                this.args.forEach(function(arg) {
-                    arg._walk(visitor);
-                });
-            });
-        }
-    });
-    var AST_New = DEFNODE("New", null, {
-        $documentation: "An object instantiation.  Derives from a function call since it has exactly the same properties"
-    }, AST_Call);
-    var AST_Seq = DEFNODE("Seq", "car cdr", {
-        $documentation: "A sequence expression (two comma-separated expressions)",
-        $propdoc: {
-            car: "[AST_Node] first element in sequence",
-            cdr: "[AST_Node] second element in sequence"
-        },
-        $cons: function(x, y) {
-            var seq = new AST_Seq(x);
-            seq.car = x;
-            seq.cdr = y;
-            return seq;
-        },
-        $from_array: function(array) {
-            if (array.length == 0) return null;
-            if (array.length == 1) return array[0].clone();
-            var list = null;
-            for (var i = array.length; --i >= 0; ) {
-                list = AST_Seq.cons(array[i], list);
-            }
-            var p = list;
-            while (p) {
-                if (p.cdr && !p.cdr.cdr) {
-                    p.cdr = p.cdr.car;
-                    break;
-                }
-                p = p.cdr;
-            }
-            return list;
-        },
-        to_array: function() {
-            var p = this, a = [];
-            while (p) {
-                a.push(p.car);
-                if (p.cdr && !(p.cdr instanceof AST_Seq)) {
-                    a.push(p.cdr);
-                    break;
-                }
-                p = p.cdr;
-            }
-            return a;
-        },
-        add: function(node) {
-            var p = this;
-            while (p) {
-                if (!(p.cdr instanceof AST_Seq)) {
-                    var cell = AST_Seq.cons(p.cdr, node);
-                    return p.cdr = cell;
-                }
-                p = p.cdr;
-            }
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.car._walk(visitor);
-                if (this.cdr) this.cdr._walk(visitor);
-            });
-        }
-    });
-    var AST_PropAccess = DEFNODE("PropAccess", "expression property", {
-        $documentation: 'Base class for property access expressions, i.e. `a.foo` or `a["foo"]`',
-        $propdoc: {
-            expression: "[AST_Node] the â€œcontainerâ€ expression",
-            property: "[AST_Node|string] the property to access.  For AST_Dot this is always a plain string, while for AST_Sub it's an arbitrary AST_Node"
-        }
-    });
-    var AST_Dot = DEFNODE("Dot", null, {
-        $documentation: "A dotted property access expression",
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.expression._walk(visitor);
-            });
-        }
-    }, AST_PropAccess);
-    var AST_Sub = DEFNODE("Sub", null, {
-        $documentation: 'Index-style property access, i.e. `a["foo"]`',
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.expression._walk(visitor);
-                this.property._walk(visitor);
-            });
-        }
-    }, AST_PropAccess);
-    var AST_Unary = DEFNODE("Unary", "operator expression", {
-        $documentation: "Base class for unary expressions",
-        $propdoc: {
-            operator: "[string] the operator",
-            expression: "[AST_Node] expression that this unary operator applies to"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.expression._walk(visitor);
-            });
-        }
-    });
-    var AST_UnaryPrefix = DEFNODE("UnaryPrefix", null, {
-        $documentation: "Unary prefix expression, i.e. `typeof i` or `++i`"
-    }, AST_Unary);
-    var AST_UnaryPostfix = DEFNODE("UnaryPostfix", null, {
-        $documentation: "Unary postfix expression, i.e. `i++`"
-    }, AST_Unary);
-    var AST_Binary = DEFNODE("Binary", "left operator right", {
-        $documentation: "Binary expression, i.e. `a + b`",
-        $propdoc: {
-            left: "[AST_Node] left-hand side expression",
-            operator: "[string] the operator",
-            right: "[AST_Node] right-hand side expression"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.left._walk(visitor);
-                this.right._walk(visitor);
-            });
-        }
-    });
-    var AST_Conditional = DEFNODE("Conditional", "condition consequent alternative", {
-        $documentation: "Conditional expression using the ternary operator, i.e. `a ? b : c`",
-        $propdoc: {
-            condition: "[AST_Node]",
-            consequent: "[AST_Node]",
-            alternative: "[AST_Node]"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.condition._walk(visitor);
-                this.consequent._walk(visitor);
-                this.alternative._walk(visitor);
-            });
-        }
-    });
-    var AST_Assign = DEFNODE("Assign", null, {
-        $documentation: "An assignment expression â€” `a = b + 5`"
-    }, AST_Binary);
-    var AST_Array = DEFNODE("Array", "elements", {
-        $documentation: "An array literal",
-        $propdoc: {
-            elements: "[AST_Node*] array of elements"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.elements.forEach(function(el) {
-                    el._walk(visitor);
-                });
-            });
-        }
-    });
-    var AST_Object = DEFNODE("Object", "properties", {
-        $documentation: "An object literal",
-        $propdoc: {
-            properties: "[AST_ObjectProperty*] array of properties"
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.properties.forEach(function(prop) {
-                    prop._walk(visitor);
-                });
-            });
-        }
-    });
-    var AST_ObjectProperty = DEFNODE("ObjectProperty", "key value", {
-        $documentation: "Base class for literal object properties",
-        $propdoc: {
-            key: "[string] the property name; it's always a plain string in our AST, no matter if it was a string, number or identifier in original code",
-            value: "[AST_Node] property value.  For setters and getters this is an AST_Function."
-        },
-        _walk: function(visitor) {
-            return visitor._visit(this, function() {
-                this.value._walk(visitor);
-            });
-        }
-    });
-    var AST_ObjectKeyVal = DEFNODE("ObjectKeyVal", null, {
-        $documentation: "A key: value object property"
-    }, AST_ObjectProperty);
-    var AST_ObjectSetter = DEFNODE("ObjectSetter", null, {
-        $documentation: "An object setter property"
-    }, AST_ObjectProperty);
-    var AST_ObjectGetter = DEFNODE("ObjectGetter", null, {
-        $documentation: "An object getter property"
-    }, AST_ObjectProperty);
-    var AST_Symbol = DEFNODE("Symbol", "scope name thedef", {
-        $propdoc: {
-            name: "[string] name of this symbol",
-            scope: "[AST_Scope/S] the current scope (not necessarily the definition scope)",
-            thedef: "[SymbolDef/S] the definition of this symbol"
-        },
-        $documentation: "Base class for all symbols"
-    });
-    var AST_SymbolAccessor = DEFNODE("SymbolAccessor", null, {
-        $documentation: "The name of a property accessor (setter/getter function)"
-    }, AST_Symbol);
-    var AST_SymbolDeclaration = DEFNODE("SymbolDeclaration", "init", {
-        $documentation: "A declaration symbol (symbol in var/const, function name or argument, symbol in catch)",
-        $propdoc: {
-            init: "[AST_Node*/S] array of initializers for this declaration."
-        }
-    }, AST_Symbol);
-    var AST_SymbolVar = DEFNODE("SymbolVar", null, {
-        $documentation: "Symbol defining a variable"
-    }, AST_SymbolDeclaration);
-    var AST_SymbolConst = DEFNODE("SymbolConst", null, {
-        $documentation: "A constant declaration"
-    }, AST_SymbolDeclaration);
-    var AST_SymbolFunarg = DEFNODE("SymbolFunarg", null, {
-        $documentation: "Symbol naming a function argument"
-    }, AST_SymbolVar);
-    var AST_SymbolDefun = DEFNODE("SymbolDefun", null, {
-        $documentation: "Symbol defining a function"
-    }, AST_SymbolDeclaration);
-    var AST_SymbolLambda = DEFNODE("SymbolLambda", null, {
-        $documentation: "Symbol naming a function expression"
-    }, AST_SymbolDeclaration);
-    var AST_SymbolCatch = DEFNODE("SymbolCatch", null, {
-        $documentation: "Symbol naming the exception in catch"
-    }, AST_SymbolDeclaration);
-    var AST_Label = DEFNODE("Label", "references", {
-        $documentation: "Symbol naming a label (declaration)",
-        $propdoc: {
-            references: "[AST_LabelRef*] a list of nodes referring to this label"
-        }
-    }, AST_Symbol);
-    var AST_SymbolRef = DEFNODE("SymbolRef", null, {
-        $documentation: "Reference to some symbol (not definition/declaration)"
-    }, AST_Symbol);
-    var AST_LabelRef = DEFNODE("LabelRef", null, {
-        $documentation: "Reference to a label symbol"
-    }, AST_Symbol);
-    var AST_This = DEFNODE("This", null, {
-        $documentation: "The `this` symbol"
-    }, AST_Symbol);
-    var AST_Constant = DEFNODE("Constant", null, {
-        $documentation: "Base class for all constants",
-        getValue: function() {
-            return this.value;
-        }
-    });
-    var AST_String = DEFNODE("String", "value", {
-        $documentation: "A string literal",
-        $propdoc: {
-            value: "[string] the contents of this string"
-        }
-    }, AST_Constant);
-    var AST_Number = DEFNODE("Number", "value", {
-        $documentation: "A number literal",
-        $propdoc: {
-            value: "[number] the numeric value"
-        }
-    }, AST_Constant);
-    var AST_RegExp = DEFNODE("RegExp", "value", {
-        $documentation: "A regexp literal",
-        $propdoc: {
-            value: "[RegExp] the actual regexp"
-        }
-    }, AST_Constant);
-    var AST_Atom = DEFNODE("Atom", null, {
-        $documentation: "Base class for atoms"
-    }, AST_Constant);
-    var AST_Null = DEFNODE("Null", null, {
-        $documentation: "The `null` atom",
-        value: null
-    }, AST_Atom);
-    var AST_NaN = DEFNODE("NaN", null, {
-        $documentation: "The impossible value",
-        value: 0 / 0
-    }, AST_Atom);
-    var AST_Undefined = DEFNODE("Undefined", null, {
-        $documentation: "The `undefined` value",
-        value: function() {}()
-    }, AST_Atom);
-    var AST_Infinity = DEFNODE("Infinity", null, {
-        $documentation: "The `Infinity` value",
-        value: 1 / 0
-    }, AST_Atom);
-    var AST_Boolean = DEFNODE("Boolean", null, {
-        $documentation: "Base class for booleans"
-    }, AST_Atom);
-    var AST_False = DEFNODE("False", null, {
-        $documentation: "The `false` atom",
-        value: false
-    }, AST_Boolean);
-    var AST_True = DEFNODE("True", null, {
-        $documentation: "The `true` atom",
-        value: true
-    }, AST_Boolean);
-    function TreeWalker(callback) {
-        this.visit = callback;
-        this.stack = [];
-    }
-    TreeWalker.prototype = {
-        _visit: function(node, descend) {
-            this.stack.push(node);
-            var ret = this.visit(node, descend ? function() {
-                descend.call(node);
-            } : noop);
-            if (!ret && descend) {
-                descend.call(node);
-            }
-            this.stack.pop();
-            return ret;
-        },
-        parent: function(n) {
-            return this.stack[this.stack.length - 2 - (n || 0)];
-        },
-        push: function(node) {
-            this.stack.push(node);
-        },
-        pop: function() {
-            return this.stack.pop();
-        },
-        self: function() {
-            return this.stack[this.stack.length - 1];
-        },
-        find_parent: function(type) {
-            var stack = this.stack;
-            for (var i = stack.length; --i >= 0; ) {
-                var x = stack[i];
-                if (x instanceof type) return x;
-            }
-        },
-        in_boolean_context: function() {
-            var stack = this.stack;
-            var i = stack.length, self = stack[--i];
-            while (i > 0) {
-                var p = stack[--i];
-                if (p instanceof AST_If && p.condition === self || p instanceof AST_Conditional && p.condition === self || p instanceof AST_DWLoop && p.condition === self || p instanceof AST_For && p.condition === self || p instanceof AST_UnaryPrefix && p.operator == "!" && p.expression === self) {
-                    return true;
-                }
-                if (!(p instanceof AST_Binary && (p.operator == "&&" || p.operator == "||"))) return false;
-                self = p;
-            }
-        },
-        loopcontrol_target: function(label) {
-            var stack = this.stack;
-            if (label) {
-                for (var i = stack.length; --i >= 0; ) {
-                    var x = stack[i];
-                    if (x instanceof AST_LabeledStatement && x.label.name == label.name) {
-                        return x.body;
-                    }
-                }
-            } else {
-                for (var i = stack.length; --i >= 0; ) {
-                    var x = stack[i];
-                    if (x instanceof AST_Switch || x instanceof AST_For || x instanceof AST_ForIn || x instanceof AST_DWLoop) return x;
-                }
-            }
-        }
-    };
-    "use strict";
-    var KEYWORDS = "break case catch const continue debugger default delete do else finally for function if in instanceof new return switch throw try typeof var void while with";
-    var KEYWORDS_ATOM = "false null true";
-    var RESERVED_WORDS = "abstract boolean byte char class double enum export extends final float goto implements import int interface long native package private protected public short static super synchronized this throws transient volatile" + " " + KEYWORDS_ATOM + " " + KEYWORDS;
-    var KEYWORDS_BEFORE_EXPRESSION = "return new delete throw else case";
-    KEYWORDS = makePredicate(KEYWORDS);
-    RESERVED_WORDS = makePredicate(RESERVED_WORDS);
-    KEYWORDS_BEFORE_EXPRESSION = makePredicate(KEYWORDS_BEFORE_EXPRESSION);
-    KEYWORDS_ATOM = makePredicate(KEYWORDS_ATOM);
-    var OPERATOR_CHARS = makePredicate(characters("+-*&%=<>!?|~^"));
-    var RE_HEX_NUMBER = /^0x[0-9a-f]+$/i;
-    var RE_OCT_NUMBER = /^0[0-7]+$/;
-    var RE_DEC_NUMBER = /^\d*\.?\d*(?:e[+-]?\d*(?:\d\.?|\.?\d)\d*)?$/i;
-    var OPERATORS = makePredicate([ "in", "instanceof", "typeof", "new", "void", "delete", "++", "--", "+", "-", "!", "~", "&", "|", "^", "*", "/", "%", ">>", "<<", ">>>", "<", ">", "<=", ">=", "==", "===", "!=", "!==", "?", "=", "+=", "-=", "/=", "*=", "%=", ">>=", "<<=", ">>>=", "|=", "^=", "&=", "&&", "||" ]);
-    var WHITESPACE_CHARS = makePredicate(characters(" Â \n\r    \fâ€‹á Žâ€€â€â€‚â€ƒâ€„â€…â€†â€‡â€ˆâ€‰â€Šâ€¯âŸã€€"));
-    var PUNC_BEFORE_EXPRESSION = makePredicate(characters("[{(,.;:"));
-    var PUNC_CHARS = makePredicate(characters("[]{}(),;:"));
-    var REGEXP_MODIFIERS = makePredicate(characters("gmsiy"));
-    var UNICODE = {
-        letter: new RegExp("[\\u0041-\\u005A\\u0061-\\u007A\\u00AA\\u00B5\\u00BA\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02C1\\u02C6-\\u02D1\\u02E0-\\u02E4\\u02EC\\u02EE\\u0370-\\u0374\\u0376\\u0377\\u037A-\\u037D\\u0386\\u0388-\\u038A\\u038C\\u038E-\\u03A1\\u03A3-\\u03F5\\u03F7-\\u0481\\u048A-\\u0523\\u0531-\\u0556\\u0559\\u0561-\\u0587\\u05D0-\\u05EA\\u05F0-\\u05F2\\u0621-\\u064A\\u066E\\u066F\\u0671-\\u06D3\\u06D5\\u06E5\\u06E6\\u06EE\\u06EF\\u06FA-\\u06FC\\u06FF\\u0710\\u0712-\\u072F\\u074D-\\u07A5\\u07B1\\u07CA-\\u07EA\\u07F4\\u07F5\\u07FA\\u0904-\\u0939\\u093D\\u0950\\u0958-\\u0961\\u0971\\u0972\\u097B-\\u097F\\u0985-\\u098C\\u098F\\u0990\\u0993-\\u09A8\\u09AA-\\u09B0\\u09B2\\u09B6-\\u09B9\\u09BD\\u09CE\\u09DC\\u09DD\\u09DF-\\u09E1\\u09F0\\u09F1\\u0A05-\\u0A0A\\u0A0F\\u0A10\\u0A13-\\u0A28\\u0A2A-\\u0A30\\u0A32\\u0A33\\u0A35\\u0A36\\u0A38\\u0A39\\u0A59-\\u0A5C\\u0A5E\\u0A72-\\u0A74\\u0A85-\\u0A8D\\u0A8F-\\u0A91\\u0A93-\\u0AA8\\u0AAA-\\u0AB0\\u0AB2\\u0AB3\\u0AB5-\\u0AB9\\u0ABD\\u0AD0\\u0AE0\\u0AE1\\u0B05-\\u0B0C\\u0B0F\\u0B10\\u0B13-\\u0B28\\u0B2A-\\u0B30\\u0B32\\u0B33\\u0B35-\\u0B39\\u0B3D\\u0B5C\\u0B5D\\u0B5F-\\u0B61\\u0B71\\u0B83\\u0B85-\\u0B8A\\u0B8E-\\u0B90\\u0B92-\\u0B95\\u0B99\\u0B9A\\u0B9C\\u0B9E\\u0B9F\\u0BA3\\u0BA4\\u0BA8-\\u0BAA\\u0BAE-\\u0BB9\\u0BD0\\u0C05-\\u0C0C\\u0C0E-\\u0C10\\u0C12-\\u0C28\\u0C2A-\\u0C33\\u0C35-\\u0C39\\u0C3D\\u0C58\\u0C59\\u0C60\\u0C61\\u0C85-\\u0C8C\\u0C8E-\\u0C90\\u0C92-\\u0CA8\\u0CAA-\\u0CB3\\u0CB5-\\u0CB9\\u0CBD\\u0CDE\\u0CE0\\u0CE1\\u0D05-\\u0D0C\\u0D0E-\\u0D10\\u0D12-\\u0D28\\u0D2A-\\u0D39\\u0D3D\\u0D60\\u0D61\\u0D7A-\\u0D7F\\u0D85-\\u0D96\\u0D9A-\\u0DB1\\u0DB3-\\u0DBB\\u0DBD\\u0DC0-\\u0DC6\\u0E01-\\u0E30\\u0E32\\u0E33\\u0E40-\\u0E46\\u0E81\\u0E82\\u0E84\\u0E87\\u0E88\\u0E8A\\u0E8D\\u0E94-\\u0E97\\u0E99-\\u0E9F\\u0EA1-\\u0EA3\\u0EA5\\u0EA7\\u0EAA\\u0EAB\\u0EAD-\\u0EB0\\u0EB2\\u0EB3\\u0EBD\\u0EC0-\\u0EC4\\u0EC6\\u0EDC\\u0EDD\\u0F00\\u0F40-\\u0F47\\u0F49-\\u0F6C\\u0F88-\\u0F8B\\u1000-\\u102A\\u103F\\u1050-\\u1055\\u105A-\\u105D\\u1061\\u1065\\u1066\\u106E-\\u1070\\u1075-\\u1081\\u108E\\u10A0-\\u10C5\\u10D0-\\u10FA\\u10FC\\u1100-\\u1159\\u115F-\\u11A2\\u11A8-\\u11F9\\u1200-\\u1248\\u124A-\\u124D\\u1250-\\u1256\\u1258\\u125A-\\u125D\\u1260-\\u1288\\u128A-\\u128D\\u1290-\\u12B0\\u12B2-\\u12B5\\u12B8-\\u12BE\\u12C0\\u12C2-\\u12C5\\u12C8-\\u12D6\\u12D8-\\u1310\\u1312-\\u1315\\u1318-\\u135A\\u1380-\\u138F\\u13A0-\\u13F4\\u1401-\\u166C\\u166F-\\u1676\\u1681-\\u169A\\u16A0-\\u16EA\\u1700-\\u170C\\u170E-\\u1711\\u1720-\\u1731\\u1740-\\u1751\\u1760-\\u176C\\u176E-\\u1770\\u1780-\\u17B3\\u17D7\\u17DC\\u1820-\\u1877\\u1880-\\u18A8\\u18AA\\u1900-\\u191C\\u1950-\\u196D\\u1970-\\u1974\\u1980-\\u19A9\\u19C1-\\u19C7\\u1A00-\\u1A16\\u1B05-\\u1B33\\u1B45-\\u1B4B\\u1B83-\\u1BA0\\u1BAE\\u1BAF\\u1C00-\\u1C23\\u1C4D-\\u1C4F\\u1C5A-\\u1C7D\\u1D00-\\u1DBF\\u1E00-\\u1F15\\u1F18-\\u1F1D\\u1F20-\\u1F45\\u1F48-\\u1F4D\\u1F50-\\u1F57\\u1F59\\u1F5B\\u1F5D\\u1F5F-\\u1F7D\\u1F80-\\u1FB4\\u1FB6-\\u1FBC\\u1FBE\\u1FC2-\\u1FC4\\u1FC6-\\u1FCC\\u1FD0-\\u1FD3\\u1FD6-\\u1FDB\\u1FE0-\\u1FEC\\u1FF2-\\u1FF4\\u1FF6-\\u1FFC\\u2071\\u207F\\u2090-\\u2094\\u2102\\u2107\\u210A-\\u2113\\u2115\\u2119-\\u211D\\u2124\\u2126\\u2128\\u212A-\\u212D\\u212F-\\u2139\\u213C-\\u213F\\u2145-\\u2149\\u214E\\u2183\\u2184\\u2C00-\\u2C2E\\u2C30-\\u2C5E\\u2C60-\\u2C6F\\u2C71-\\u2C7D\\u2C80-\\u2CE4\\u2D00-\\u2D25\\u2D30-\\u2D65\\u2D6F\\u2D80-\\u2D96\\u2DA0-\\u2DA6\\u2DA8-\\u2DAE\\u2DB0-\\u2DB6\\u2DB8-\\u2DBE\\u2DC0-\\u2DC6\\u2DC8-\\u2DCE\\u2DD0-\\u2DD6\\u2DD8-\\u2DDE\\u2E2F\\u3005\\u3006\\u3031-\\u3035\\u303B\\u303C\\u3041-\\u3096\\u309D-\\u309F\\u30A1-\\u30FA\\u30FC-\\u30FF\\u3105-\\u312D\\u3131-\\u318E\\u31A0-\\u31B7\\u31F0-\\u31FF\\u3400\\u4DB5\\u4E00\\u9FC3\\uA000-\\uA48C\\uA500-\\uA60C\\uA610-\\uA61F\\uA62A\\uA62B\\uA640-\\uA65F\\uA662-\\uA66E\\uA67F-\\uA697\\uA717-\\uA71F\\uA722-\\uA788\\uA78B\\uA78C\\uA7FB-\\uA801\\uA803-\\uA805\\uA807-\\uA80A\\uA80C-\\uA822\\uA840-\\uA873\\uA882-\\uA8B3\\uA90A-\\uA925\\uA930-\\uA946\\uAA00-\\uAA28\\uAA40-\\uAA42\\uAA44-\\uAA4B\\uAC00\\uD7A3\\uF900-\\uFA2D\\uFA30-\\uFA6A\\uFA70-\\uFAD9\\uFB00-\\uFB06\\uFB13-\\uFB17\\uFB1D\\uFB1F-\\uFB28\\uFB2A-\\uFB36\\uFB38-\\uFB3C\\uFB3E\\uFB40\\uFB41\\uFB43\\uFB44\\uFB46-\\uFBB1\\uFBD3-\\uFD3D\\uFD50-\\uFD8F\\uFD92-\\uFDC7\\uFDF0-\\uFDFB\\uFE70-\\uFE74\\uFE76-\\uFEFC\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF66-\\uFFBE\\uFFC2-\\uFFC7\\uFFCA-\\uFFCF\\uFFD2-\\uFFD7\\uFFDA-\\uFFDC]"),
-        non_spacing_mark: new RegExp("[\\u0300-\\u036F\\u0483-\\u0487\\u0591-\\u05BD\\u05BF\\u05C1\\u05C2\\u05C4\\u05C5\\u05C7\\u0610-\\u061A\\u064B-\\u065E\\u0670\\u06D6-\\u06DC\\u06DF-\\u06E4\\u06E7\\u06E8\\u06EA-\\u06ED\\u0711\\u0730-\\u074A\\u07A6-\\u07B0\\u07EB-\\u07F3\\u0816-\\u0819\\u081B-\\u0823\\u0825-\\u0827\\u0829-\\u082D\\u0900-\\u0902\\u093C\\u0941-\\u0948\\u094D\\u0951-\\u0955\\u0962\\u0963\\u0981\\u09BC\\u09C1-\\u09C4\\u09CD\\u09E2\\u09E3\\u0A01\\u0A02\\u0A3C\\u0A41\\u0A42\\u0A47\\u0A48\\u0A4B-\\u0A4D\\u0A51\\u0A70\\u0A71\\u0A75\\u0A81\\u0A82\\u0ABC\\u0AC1-\\u0AC5\\u0AC7\\u0AC8\\u0ACD\\u0AE2\\u0AE3\\u0B01\\u0B3C\\u0B3F\\u0B41-\\u0B44\\u0B4D\\u0B56\\u0B62\\u0B63\\u0B82\\u0BC0\\u0BCD\\u0C3E-\\u0C40\\u0C46-\\u0C48\\u0C4A-\\u0C4D\\u0C55\\u0C56\\u0C62\\u0C63\\u0CBC\\u0CBF\\u0CC6\\u0CCC\\u0CCD\\u0CE2\\u0CE3\\u0D41-\\u0D44\\u0D4D\\u0D62\\u0D63\\u0DCA\\u0DD2-\\u0DD4\\u0DD6\\u0E31\\u0E34-\\u0E3A\\u0E47-\\u0E4E\\u0EB1\\u0EB4-\\u0EB9\\u0EBB\\u0EBC\\u0EC8-\\u0ECD\\u0F18\\u0F19\\u0F35\\u0F37\\u0F39\\u0F71-\\u0F7E\\u0F80-\\u0F84\\u0F86\\u0F87\\u0F90-\\u0F97\\u0F99-\\u0FBC\\u0FC6\\u102D-\\u1030\\u1032-\\u1037\\u1039\\u103A\\u103D\\u103E\\u1058\\u1059\\u105E-\\u1060\\u1071-\\u1074\\u1082\\u1085\\u1086\\u108D\\u109D\\u135F\\u1712-\\u1714\\u1732-\\u1734\\u1752\\u1753\\u1772\\u1773\\u17B7-\\u17BD\\u17C6\\u17C9-\\u17D3\\u17DD\\u180B-\\u180D\\u18A9\\u1920-\\u1922\\u1927\\u1928\\u1932\\u1939-\\u193B\\u1A17\\u1A18\\u1A56\\u1A58-\\u1A5E\\u1A60\\u1A62\\u1A65-\\u1A6C\\u1A73-\\u1A7C\\u1A7F\\u1B00-\\u1B03\\u1B34\\u1B36-\\u1B3A\\u1B3C\\u1B42\\u1B6B-\\u1B73\\u1B80\\u1B81\\u1BA2-\\u1BA5\\u1BA8\\u1BA9\\u1C2C-\\u1C33\\u1C36\\u1C37\\u1CD0-\\u1CD2\\u1CD4-\\u1CE0\\u1CE2-\\u1CE8\\u1CED\\u1DC0-\\u1DE6\\u1DFD-\\u1DFF\\u20D0-\\u20DC\\u20E1\\u20E5-\\u20F0\\u2CEF-\\u2CF1\\u2DE0-\\u2DFF\\u302A-\\u302F\\u3099\\u309A\\uA66F\\uA67C\\uA67D\\uA6F0\\uA6F1\\uA802\\uA806\\uA80B\\uA825\\uA826\\uA8C4\\uA8E0-\\uA8F1\\uA926-\\uA92D\\uA947-\\uA951\\uA980-\\uA982\\uA9B3\\uA9B6-\\uA9B9\\uA9BC\\uAA29-\\uAA2E\\uAA31\\uAA32\\uAA35\\uAA36\\uAA43\\uAA4C\\uAAB0\\uAAB2-\\uAAB4\\uAAB7\\uAAB8\\uAABE\\uAABF\\uAAC1\\uABE5\\uABE8\\uABED\\uFB1E\\uFE00-\\uFE0F\\uFE20-\\uFE26]"),
-        space_combining_mark: new RegExp("[\\u0903\\u093E-\\u0940\\u0949-\\u094C\\u094E\\u0982\\u0983\\u09BE-\\u09C0\\u09C7\\u09C8\\u09CB\\u09CC\\u09D7\\u0A03\\u0A3E-\\u0A40\\u0A83\\u0ABE-\\u0AC0\\u0AC9\\u0ACB\\u0ACC\\u0B02\\u0B03\\u0B3E\\u0B40\\u0B47\\u0B48\\u0B4B\\u0B4C\\u0B57\\u0BBE\\u0BBF\\u0BC1\\u0BC2\\u0BC6-\\u0BC8\\u0BCA-\\u0BCC\\u0BD7\\u0C01-\\u0C03\\u0C41-\\u0C44\\u0C82\\u0C83\\u0CBE\\u0CC0-\\u0CC4\\u0CC7\\u0CC8\\u0CCA\\u0CCB\\u0CD5\\u0CD6\\u0D02\\u0D03\\u0D3E-\\u0D40\\u0D46-\\u0D48\\u0D4A-\\u0D4C\\u0D57\\u0D82\\u0D83\\u0DCF-\\u0DD1\\u0DD8-\\u0DDF\\u0DF2\\u0DF3\\u0F3E\\u0F3F\\u0F7F\\u102B\\u102C\\u1031\\u1038\\u103B\\u103C\\u1056\\u1057\\u1062-\\u1064\\u1067-\\u106D\\u1083\\u1084\\u1087-\\u108C\\u108F\\u109A-\\u109C\\u17B6\\u17BE-\\u17C5\\u17C7\\u17C8\\u1923-\\u1926\\u1929-\\u192B\\u1930\\u1931\\u1933-\\u1938\\u19B0-\\u19C0\\u19C8\\u19C9\\u1A19-\\u1A1B\\u1A55\\u1A57\\u1A61\\u1A63\\u1A64\\u1A6D-\\u1A72\\u1B04\\u1B35\\u1B3B\\u1B3D-\\u1B41\\u1B43\\u1B44\\u1B82\\u1BA1\\u1BA6\\u1BA7\\u1BAA\\u1C24-\\u1C2B\\u1C34\\u1C35\\u1CE1\\u1CF2\\uA823\\uA824\\uA827\\uA880\\uA881\\uA8B4-\\uA8C3\\uA952\\uA953\\uA983\\uA9B4\\uA9B5\\uA9BA\\uA9BB\\uA9BD-\\uA9C0\\uAA2F\\uAA30\\uAA33\\uAA34\\uAA4D\\uAA7B\\uABE3\\uABE4\\uABE6\\uABE7\\uABE9\\uABEA\\uABEC]"),
-        connector_punctuation: new RegExp("[\\u005F\\u203F\\u2040\\u2054\\uFE33\\uFE34\\uFE4D-\\uFE4F\\uFF3F]")
-    };
-    function is_letter(code) {
-        return code >= 97 && code <= 122 || code >= 65 && code <= 90 || code >= 170 && UNICODE.letter.test(String.fromCharCode(code));
-    }
-    function is_digit(code) {
-        return code >= 48 && code <= 57;
-    }
-    function is_alphanumeric_char(code) {
-        return is_digit(code) || is_letter(code);
-    }
-    function is_unicode_combining_mark(ch) {
-        return UNICODE.non_spacing_mark.test(ch) || UNICODE.space_combining_mark.test(ch);
-    }
-    function is_unicode_connector_punctuation(ch) {
-        return UNICODE.connector_punctuation.test(ch);
-    }
-    function is_identifier(name) {
-        return /^[a-z_$][a-z0-9_$]*$/i.test(name) && !RESERVED_WORDS(name);
-    }
-    function is_identifier_start(code) {
-        return code == 36 || code == 95 || is_letter(code);
-    }
-    function is_identifier_char(ch) {
-        var code = ch.charCodeAt(0);
-        return is_identifier_start(code) || is_digit(code) || code == 8204 || code == 8205 || is_unicode_combining_mark(ch) || is_unicode_connector_punctuation(ch);
-    }
-    function parse_js_number(num) {
-        if (RE_HEX_NUMBER.test(num)) {
-            return parseInt(num.substr(2), 16);
-        } else if (RE_OCT_NUMBER.test(num)) {
-            return parseInt(num.substr(1), 8);
-        } else if (RE_DEC_NUMBER.test(num)) {
-            return parseFloat(num);
-        }
-    }
-    function JS_Parse_Error(message, line, col, pos) {
-        this.message = message;
-        this.line = line;
-        this.col = col;
-        this.pos = pos;
-        this.stack = new Error().stack;
-    }
-    JS_Parse_Error.prototype.toString = function() {
-        return this.message + " (line: " + this.line + ", col: " + this.col + ", pos: " + this.pos + ")" + "\n\n" + this.stack;
-    };
-    function js_error(message, filename, line, col, pos) {
-        AST_Node.warn("ERROR: {message} [{file}:{line},{col}]", {
-            message: message,
-            file: filename,
-            line: line,
-            col: col
-        });
-        throw new JS_Parse_Error(message, line, col, pos);
-    }
-    function is_token(token, type, val) {
-        return token.type == type && (val == null || token.value == val);
-    }
-    var EX_EOF = {};
-    function tokenizer($TEXT, filename) {
-        var S = {
-            text: $TEXT.replace(/\r\n?|[\n\u2028\u2029]/g, "\n").replace(/\uFEFF/g, ""),
-            filename: filename,
-            pos: 0,
-            tokpos: 0,
-            line: 1,
-            tokline: 0,
-            col: 0,
-            tokcol: 0,
-            newline_before: false,
-            regex_allowed: false,
-            comments_before: []
-        };
-        function peek() {
-            return S.text.charAt(S.pos);
-        }
-        function next(signal_eof, in_string) {
-            var ch = S.text.charAt(S.pos++);
-            if (signal_eof && !ch) throw EX_EOF;
-            if (ch == "\n") {
-                S.newline_before = S.newline_before || !in_string;
-                ++S.line;
-                S.col = 0;
-            } else {
-                ++S.col;
-            }
-            return ch;
-        }
-        function find(what, signal_eof) {
-            var pos = S.text.indexOf(what, S.pos);
-            if (signal_eof && pos == -1) throw EX_EOF;
-            return pos;
-        }
-        function start_token() {
-            S.tokline = S.line;
-            S.tokcol = S.col;
-            S.tokpos = S.pos;
-        }
-        function token(type, value, is_comment) {
-            S.regex_allowed = type == "operator" && !UNARY_POSTFIX[value] || type == "keyword" && KEYWORDS_BEFORE_EXPRESSION(value) || type == "punc" && PUNC_BEFORE_EXPRESSION(value);
-            var ret = {
-                type: type,
-                value: value,
-                line: S.tokline,
-                col: S.tokcol,
-                pos: S.tokpos,
-                endpos: S.pos,
-                nlb: S.newline_before,
-                file: filename
-            };
-            if (!is_comment) {
-                ret.comments_before = S.comments_before;
-                S.comments_before = [];
-                for (var i = 0, len = ret.comments_before.length; i < len; i++) {
-                    ret.nlb = ret.nlb || ret.comments_before[i].nlb;
-                }
-            }
-            S.newline_before = false;
-            return new AST_Token(ret);
-        }
-        function skip_whitespace() {
-            while (WHITESPACE_CHARS(peek())) next();
-        }
-        function read_while(pred) {
-            var ret = "", ch, i = 0;
-            while ((ch = peek()) && pred(ch, i++)) ret += next();
-            return ret;
-        }
-        function parse_error(err) {
-            js_error(err, filename, S.tokline, S.tokcol, S.tokpos);
-        }
-        function read_num(prefix) {
-            var has_e = false, after_e = false, has_x = false, has_dot = prefix == ".";
-            var num = read_while(function(ch, i) {
-                var code = ch.charCodeAt(0);
-                switch (code) {
-                  case 120:
-                  case 88:
-                    return has_x ? false : has_x = true;
-
-                  case 101:
-                  case 69:
-                    return has_x ? true : has_e ? false : has_e = after_e = true;
-
-                  case 45:
-                    return after_e || i == 0 && !prefix;
-
-                  case 43:
-                    return after_e;
-
-                  case after_e = false, 46:
-                    return !has_dot && !has_x && !has_e ? has_dot = true : false;
-                }
-                return is_alphanumeric_char(code);
-            });
-            if (prefix) num = prefix + num;
-            var valid = parse_js_number(num);
-            if (!isNaN(valid)) {
-                return token("num", valid);
-            } else {
-                parse_error("Invalid syntax: " + num);
-            }
-        }
-        function read_escaped_char(in_string) {
-            var ch = next(true, in_string);
-            switch (ch.charCodeAt(0)) {
-              case 110:
-                return "\n";
-
-              case 114:
-                return "\r";
-
-              case 116:
-                return "    ";
-
-              case 98:
-                return "\b";
-
-              case 118:
-                return "";
-
-              case 102:
-                return "\f";
-
-              case 48:
-                return "\0";
-
-              case 120:
-                return String.fromCharCode(hex_bytes(2));
-
-              case 117:
-                return String.fromCharCode(hex_bytes(4));
-
-              case 10:
-                return "";
-
-              default:
-                return ch;
-            }
-        }
-        function hex_bytes(n) {
-            var num = 0;
-            for (;n > 0; --n) {
-                var digit = parseInt(next(true), 16);
-                if (isNaN(digit)) parse_error("Invalid hex-character pattern in string");
-                num = num << 4 | digit;
-            }
-            return num;
-        }
-        var read_string = with_eof_error("Unterminated string constant", function() {
-            var quote = next(), ret = "";
-            for (;;) {
-                var ch = next(true);
-                if (ch == "\\") {
-                    var octal_len = 0, first = null;
-                    ch = read_while(function(ch) {
-                        if (ch >= "0" && ch <= "7") {
-                            if (!first) {
-                                first = ch;
-                                return ++octal_len;
-                            } else if (first <= "3" && octal_len <= 2) return ++octal_len; else if (first >= "4" && octal_len <= 1) return ++octal_len;
-                        }
-                        return false;
+        var wrapped_tl = "(function(exports, global){ global['" + name + "'] = exports; '$ORIG'; '$EXPORTS'; }({}, (function(){return this}())))";
+        wrapped_tl = parse(wrapped_tl);
+        wrapped_tl = wrapped_tl.transform(new TreeTransformer(function before(node){
+            if (node instanceof AST_SimpleStatement) {
+                node = node.body;
+                if (node instanceof AST_String) switch (node.getValue()) {
+                  case "$ORIG":
+                    return MAP.splice(self.body);
+                  case "$EXPORTS":
+                    var body = [];
+                    to_export.forEach(function(sym){
+                        body.push(new AST_SimpleStatement({
+                            body: new AST_Assign({
+                                left: new AST_Sub({
+                                    expression: new AST_SymbolRef({ name: "exports" }),
+                                    property: new AST_String({ value: sym.name }),
+                                }),
+                                operator: "=",
+                                right: new AST_SymbolRef(sym),
+                            }),
+                        }));
                     });
-                    if (octal_len > 0) ch = String.fromCharCode(parseInt(ch, 8)); else ch = read_escaped_char(true);
-                } else if (ch == quote) break;
-                ret += ch;
-            }
-            return token("string", ret);
-        });
-        function read_line_comment() {
-            next();
-            var i = find("\n"), ret;
-            if (i == -1) {
-                ret = S.text.substr(S.pos);
-                S.pos = S.text.length;
-            } else {
-                ret = S.text.substring(S.pos, i);
-                S.pos = i;
-            }
-            return token("comment1", ret, true);
-        }
-        var read_multiline_comment = with_eof_error("Unterminated multiline comment", function() {
-            next();
-            var i = find("*/", true);
-            var text = S.text.substring(S.pos, i);
-            var a = text.split("\n"), n = a.length;
-            S.pos = i + 2;
-            S.line += n - 1;
-            if (n > 1) S.col = a[n - 1].length; else S.col += a[n - 1].length;
-            S.col += 2;
-            S.newline_before = S.newline_before || text.indexOf("\n") >= 0;
-            return token("comment2", text, true);
-        });
-        function read_name() {
-            var backslash = false, name = "", ch, escaped = false, hex;
-            while ((ch = peek()) != null) {
-                if (!backslash) {
-                    if (ch == "\\") escaped = backslash = true, next(); else if (is_identifier_char(ch)) name += next(); else break;
-                } else {
-                    if (ch != "u") parse_error("Expecting UnicodeEscapeSequence -- uXXXX");
-                    ch = read_escaped_char();
-                    if (!is_identifier_char(ch)) parse_error("Unicode char: " + ch.charCodeAt(0) + " is not valid in identifier");
-                    name += ch;
-                    backslash = false;
+                    return MAP.splice(body);
                 }
             }
-            if (KEYWORDS(name) && escaped) {
-                hex = name.charCodeAt(0).toString(16).toUpperCase();
-                name = "\\u" + "0000".substr(hex.length) + hex + name.slice(1);
-            }
-            return name;
-        }
-        var read_regexp = with_eof_error("Unterminated regular expression", function(regexp) {
-            var prev_backslash = false, ch, in_class = false;
-            while (ch = next(true)) if (prev_backslash) {
-                regexp += "\\" + ch;
-                prev_backslash = false;
-            } else if (ch == "[") {
-                in_class = true;
-                regexp += ch;
-            } else if (ch == "]" && in_class) {
-                in_class = false;
-                regexp += ch;
-            } else if (ch == "/" && !in_class) {
-                break;
-            } else if (ch == "\\") {
-                prev_backslash = true;
-            } else {
-                regexp += ch;
-            }
-            var mods = read_name();
-            return token("regexp", new RegExp(regexp, mods));
-        });
-        function read_operator(prefix) {
-            function grow(op) {
-                if (!peek()) return op;
-                var bigger = op + peek();
-                if (OPERATORS(bigger)) {
-                    next();
-                    return grow(bigger);
-                } else {
-                    return op;
-                }
-            }
-            return token("operator", grow(prefix || next()));
-        }
-        function handle_slash() {
-            next();
-            var regex_allowed = S.regex_allowed;
-            switch (peek()) {
-              case "/":
-                S.comments_before.push(read_line_comment());
-                S.regex_allowed = regex_allowed;
-                return next_token();
+        }));
+        return wrapped_tl;
+    }
+}, AST_Scope);
 
-              case "*":
-                S.comments_before.push(read_multiline_comment());
-                S.regex_allowed = regex_allowed;
-                return next_token();
+var AST_Lambda = DEFNODE("Lambda", "name argnames uses_arguments", {
+    $documentation: "Base class for functions",
+    $propdoc: {
+        name: "[AST_SymbolDeclaration?] the name of this function",
+        argnames: "[AST_SymbolFunarg*] array of function arguments",
+        uses_arguments: "[boolean/S] tells whether this function accesses the arguments array"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            if (this.name) this.name._walk(visitor);
+            this.argnames.forEach(function(arg){
+                arg._walk(visitor);
+            });
+            walk_body(this, visitor);
+        });
+    }
+}, AST_Scope);
+
+var AST_Accessor = DEFNODE("Accessor", null, {
+    $documentation: "A setter/getter function.  The `name` property is always null."
+}, AST_Lambda);
+
+var AST_Function = DEFNODE("Function", null, {
+    $documentation: "A function expression"
+}, AST_Lambda);
+
+var AST_Defun = DEFNODE("Defun", null, {
+    $documentation: "A function definition"
+}, AST_Lambda);
+
+/* -----[ JUMPS ]----- */
+
+var AST_Jump = DEFNODE("Jump", null, {
+    $documentation: "Base class for â€œjumpsâ€ (for now that's `return`, `throw`, `break` and `continue`)"
+}, AST_Statement);
+
+var AST_Exit = DEFNODE("Exit", "value", {
+    $documentation: "Base class for â€œexitsâ€ (`return` and `throw`)",
+    $propdoc: {
+        value: "[AST_Node?] the value returned or thrown by this statement; could be null for AST_Return"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, this.value && function(){
+            this.value._walk(visitor);
+        });
+    }
+}, AST_Jump);
+
+var AST_Return = DEFNODE("Return", null, {
+    $documentation: "A `return` statement"
+}, AST_Exit);
+
+var AST_Throw = DEFNODE("Throw", null, {
+    $documentation: "A `throw` statement"
+}, AST_Exit);
+
+var AST_LoopControl = DEFNODE("LoopControl", "label", {
+    $documentation: "Base class for loop control statements (`break` and `continue`)",
+    $propdoc: {
+        label: "[AST_LabelRef?] the label, or null if none",
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, this.label && function(){
+            this.label._walk(visitor);
+        });
+    }
+}, AST_Jump);
+
+var AST_Break = DEFNODE("Break", null, {
+    $documentation: "A `break` statement"
+}, AST_LoopControl);
+
+var AST_Continue = DEFNODE("Continue", null, {
+    $documentation: "A `continue` statement"
+}, AST_LoopControl);
+
+/* -----[ IF ]----- */
+
+var AST_If = DEFNODE("If", "condition alternative", {
+    $documentation: "A `if` statement",
+    $propdoc: {
+        condition: "[AST_Node] the `if` condition",
+        alternative: "[AST_Statement?] the `else` part, or null if not present"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.condition._walk(visitor);
+            this.body._walk(visitor);
+            if (this.alternative) this.alternative._walk(visitor);
+        });
+    }
+}, AST_StatementWithBody);
+
+/* -----[ SWITCH ]----- */
+
+var AST_Switch = DEFNODE("Switch", "expression", {
+    $documentation: "A `switch` statement",
+    $propdoc: {
+        expression: "[AST_Node] the `switch` â€œdiscriminantâ€"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.expression._walk(visitor);
+            walk_body(this, visitor);
+        });
+    }
+}, AST_Block);
+
+var AST_SwitchBranch = DEFNODE("SwitchBranch", null, {
+    $documentation: "Base class for `switch` branches",
+}, AST_Block);
+
+var AST_Default = DEFNODE("Default", null, {
+    $documentation: "A `default` switch branch",
+}, AST_SwitchBranch);
+
+var AST_Case = DEFNODE("Case", "expression", {
+    $documentation: "A `case` switch branch",
+    $propdoc: {
+        expression: "[AST_Node] the `case` expression"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.expression._walk(visitor);
+            walk_body(this, visitor);
+        });
+    }
+}, AST_SwitchBranch);
+
+/* -----[ EXCEPTIONS ]----- */
+
+var AST_Try = DEFNODE("Try", "bcatch bfinally", {
+    $documentation: "A `try` statement",
+    $propdoc: {
+        bcatch: "[AST_Catch?] the catch block, or null if not present",
+        bfinally: "[AST_Finally?] the finally block, or null if not present"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            walk_body(this, visitor);
+            if (this.bcatch) this.bcatch._walk(visitor);
+            if (this.bfinally) this.bfinally._walk(visitor);
+        });
+    }
+}, AST_Block);
+
+var AST_Catch = DEFNODE("Catch", "argname", {
+    $documentation: "A `catch` node; only makes sense as part of a `try` statement",
+    $propdoc: {
+        argname: "[AST_SymbolCatch] symbol for the exception"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.argname._walk(visitor);
+            walk_body(this, visitor);
+        });
+    }
+}, AST_Block);
+
+var AST_Finally = DEFNODE("Finally", null, {
+    $documentation: "A `finally` node; only makes sense as part of a `try` statement"
+}, AST_Block);
+
+/* -----[ VAR/CONST ]----- */
+
+var AST_Definitions = DEFNODE("Definitions", "definitions", {
+    $documentation: "Base class for `var` or `const` nodes (variable declarations/initializations)",
+    $propdoc: {
+        definitions: "[AST_VarDef*] array of variable definitions"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.definitions.forEach(function(def){
+                def._walk(visitor);
+            });
+        });
+    }
+}, AST_Statement);
+
+var AST_Var = DEFNODE("Var", null, {
+    $documentation: "A `var` statement"
+}, AST_Definitions);
+
+var AST_Const = DEFNODE("Const", null, {
+    $documentation: "A `const` statement"
+}, AST_Definitions);
+
+var AST_VarDef = DEFNODE("VarDef", "name value", {
+    $documentation: "A variable declaration; only appears in a AST_Definitions node",
+    $propdoc: {
+        name: "[AST_SymbolVar|AST_SymbolConst] name of the variable",
+        value: "[AST_Node?] initializer, or null of there's no initializer"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.name._walk(visitor);
+            if (this.value) this.value._walk(visitor);
+        });
+    }
+});
+
+/* -----[ OTHER ]----- */
+
+var AST_Call = DEFNODE("Call", "expression args", {
+    $documentation: "A function call expression",
+    $propdoc: {
+        expression: "[AST_Node] expression to invoke as function",
+        args: "[AST_Node*] array of arguments"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.expression._walk(visitor);
+            this.args.forEach(function(arg){
+                arg._walk(visitor);
+            });
+        });
+    }
+});
+
+var AST_New = DEFNODE("New", null, {
+    $documentation: "An object instantiation.  Derives from a function call since it has exactly the same properties"
+}, AST_Call);
+
+var AST_Seq = DEFNODE("Seq", "car cdr", {
+    $documentation: "A sequence expression (two comma-separated expressions)",
+    $propdoc: {
+        car: "[AST_Node] first element in sequence",
+        cdr: "[AST_Node] second element in sequence"
+    },
+    $cons: function(x, y) {
+        var seq = new AST_Seq(x);
+        seq.car = x;
+        seq.cdr = y;
+        return seq;
+    },
+    $from_array: function(array) {
+        if (array.length == 0) return null;
+        if (array.length == 1) return array[0].clone();
+        var list = null;
+        for (var i = array.length; --i >= 0;) {
+            list = AST_Seq.cons(array[i], list);
+        }
+        var p = list;
+        while (p) {
+            if (p.cdr && !p.cdr.cdr) {
+                p.cdr = p.cdr.car;
+                break;
             }
-            return S.regex_allowed ? read_regexp("") : read_operator("/");
+            p = p.cdr;
         }
-        function handle_dot() {
+        return list;
+    },
+    to_array: function() {
+        var p = this, a = [];
+        while (p) {
+            a.push(p.car);
+            if (p.cdr && !(p.cdr instanceof AST_Seq)) {
+                a.push(p.cdr);
+                break;
+            }
+            p = p.cdr;
+        }
+        return a;
+    },
+    add: function(node) {
+        var p = this;
+        while (p) {
+            if (!(p.cdr instanceof AST_Seq)) {
+                var cell = AST_Seq.cons(p.cdr, node);
+                return p.cdr = cell;
+            }
+            p = p.cdr;
+        }
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.car._walk(visitor);
+            if (this.cdr) this.cdr._walk(visitor);
+        });
+    }
+});
+
+var AST_PropAccess = DEFNODE("PropAccess", "expression property", {
+    $documentation: "Base class for property access expressions, i.e. `a.foo` or `a[\"foo\"]`",
+    $propdoc: {
+        expression: "[AST_Node] the â€œcontainerâ€ expression",
+        property: "[AST_Node|string] the property to access.  For AST_Dot this is always a plain string, while for AST_Sub it's an arbitrary AST_Node"
+    }
+});
+
+var AST_Dot = DEFNODE("Dot", null, {
+    $documentation: "A dotted property access expression",
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.expression._walk(visitor);
+        });
+    }
+}, AST_PropAccess);
+
+var AST_Sub = DEFNODE("Sub", null, {
+    $documentation: "Index-style property access, i.e. `a[\"foo\"]`",
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.expression._walk(visitor);
+            this.property._walk(visitor);
+        });
+    }
+}, AST_PropAccess);
+
+var AST_Unary = DEFNODE("Unary", "operator expression", {
+    $documentation: "Base class for unary expressions",
+    $propdoc: {
+        operator: "[string] the operator",
+        expression: "[AST_Node] expression that this unary operator applies to"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.expression._walk(visitor);
+        });
+    }
+});
+
+var AST_UnaryPrefix = DEFNODE("UnaryPrefix", null, {
+    $documentation: "Unary prefix expression, i.e. `typeof i` or `++i`"
+}, AST_Unary);
+
+var AST_UnaryPostfix = DEFNODE("UnaryPostfix", null, {
+    $documentation: "Unary postfix expression, i.e. `i++`"
+}, AST_Unary);
+
+var AST_Binary = DEFNODE("Binary", "left operator right", {
+    $documentation: "Binary expression, i.e. `a + b`",
+    $propdoc: {
+        left: "[AST_Node] left-hand side expression",
+        operator: "[string] the operator",
+        right: "[AST_Node] right-hand side expression"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.left._walk(visitor);
+            this.right._walk(visitor);
+        });
+    }
+});
+
+var AST_Conditional = DEFNODE("Conditional", "condition consequent alternative", {
+    $documentation: "Conditional expression using the ternary operator, i.e. `a ? b : c`",
+    $propdoc: {
+        condition: "[AST_Node]",
+        consequent: "[AST_Node]",
+        alternative: "[AST_Node]"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.condition._walk(visitor);
+            this.consequent._walk(visitor);
+            this.alternative._walk(visitor);
+        });
+    }
+});
+
+var AST_Assign = DEFNODE("Assign", null, {
+    $documentation: "An assignment expression â€” `a = b + 5`",
+}, AST_Binary);
+
+/* -----[ LITERALS ]----- */
+
+var AST_Array = DEFNODE("Array", "elements", {
+    $documentation: "An array literal",
+    $propdoc: {
+        elements: "[AST_Node*] array of elements"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.elements.forEach(function(el){
+                el._walk(visitor);
+            });
+        });
+    }
+});
+
+var AST_Object = DEFNODE("Object", "properties", {
+    $documentation: "An object literal",
+    $propdoc: {
+        properties: "[AST_ObjectProperty*] array of properties"
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.properties.forEach(function(prop){
+                prop._walk(visitor);
+            });
+        });
+    }
+});
+
+var AST_ObjectProperty = DEFNODE("ObjectProperty", "key value", {
+    $documentation: "Base class for literal object properties",
+    $propdoc: {
+        key: "[string] the property name converted to a string for ObjectKeyVal.  For setters and getters this is an arbitrary AST_Node.",
+        value: "[AST_Node] property value.  For setters and getters this is an AST_Function."
+    },
+    _walk: function(visitor) {
+        return visitor._visit(this, function(){
+            this.value._walk(visitor);
+        });
+    }
+});
+
+var AST_ObjectKeyVal = DEFNODE("ObjectKeyVal", null, {
+    $documentation: "A key: value object property",
+}, AST_ObjectProperty);
+
+var AST_ObjectSetter = DEFNODE("ObjectSetter", null, {
+    $documentation: "An object setter property",
+}, AST_ObjectProperty);
+
+var AST_ObjectGetter = DEFNODE("ObjectGetter", null, {
+    $documentation: "An object getter property",
+}, AST_ObjectProperty);
+
+var AST_Symbol = DEFNODE("Symbol", "scope name thedef", {
+    $propdoc: {
+        name: "[string] name of this symbol",
+        scope: "[AST_Scope/S] the current scope (not necessarily the definition scope)",
+        thedef: "[SymbolDef/S] the definition of this symbol"
+    },
+    $documentation: "Base class for all symbols",
+});
+
+var AST_SymbolAccessor = DEFNODE("SymbolAccessor", null, {
+    $documentation: "The name of a property accessor (setter/getter function)"
+}, AST_Symbol);
+
+var AST_SymbolDeclaration = DEFNODE("SymbolDeclaration", "init", {
+    $documentation: "A declaration symbol (symbol in var/const, function name or argument, symbol in catch)",
+    $propdoc: {
+        init: "[AST_Node*/S] array of initializers for this declaration."
+    }
+}, AST_Symbol);
+
+var AST_SymbolVar = DEFNODE("SymbolVar", null, {
+    $documentation: "Symbol defining a variable",
+}, AST_SymbolDeclaration);
+
+var AST_SymbolConst = DEFNODE("SymbolConst", null, {
+    $documentation: "A constant declaration"
+}, AST_SymbolDeclaration);
+
+var AST_SymbolFunarg = DEFNODE("SymbolFunarg", null, {
+    $documentation: "Symbol naming a function argument",
+}, AST_SymbolVar);
+
+var AST_SymbolDefun = DEFNODE("SymbolDefun", null, {
+    $documentation: "Symbol defining a function",
+}, AST_SymbolDeclaration);
+
+var AST_SymbolLambda = DEFNODE("SymbolLambda", null, {
+    $documentation: "Symbol naming a function expression",
+}, AST_SymbolDeclaration);
+
+var AST_SymbolCatch = DEFNODE("SymbolCatch", null, {
+    $documentation: "Symbol naming the exception in catch",
+}, AST_SymbolDeclaration);
+
+var AST_Label = DEFNODE("Label", "references", {
+    $documentation: "Symbol naming a label (declaration)",
+    $propdoc: {
+        references: "[AST_LoopControl*] a list of nodes referring to this label"
+    },
+    initialize: function() {
+        this.references = [];
+        this.thedef = this;
+    }
+}, AST_Symbol);
+
+var AST_SymbolRef = DEFNODE("SymbolRef", null, {
+    $documentation: "Reference to some symbol (not definition/declaration)",
+}, AST_Symbol);
+
+var AST_LabelRef = DEFNODE("LabelRef", null, {
+    $documentation: "Reference to a label symbol",
+}, AST_Symbol);
+
+var AST_This = DEFNODE("This", null, {
+    $documentation: "The `this` symbol",
+}, AST_Symbol);
+
+var AST_Constant = DEFNODE("Constant", null, {
+    $documentation: "Base class for all constants",
+    getValue: function() {
+        return this.value;
+    }
+});
+
+var AST_String = DEFNODE("String", "value", {
+    $documentation: "A string literal",
+    $propdoc: {
+        value: "[string] the contents of this string"
+    }
+}, AST_Constant);
+
+var AST_Number = DEFNODE("Number", "value", {
+    $documentation: "A number literal",
+    $propdoc: {
+        value: "[number] the numeric value"
+    }
+}, AST_Constant);
+
+var AST_RegExp = DEFNODE("RegExp", "value", {
+    $documentation: "A regexp literal",
+    $propdoc: {
+        value: "[RegExp] the actual regexp"
+    }
+}, AST_Constant);
+
+var AST_Atom = DEFNODE("Atom", null, {
+    $documentation: "Base class for atoms",
+}, AST_Constant);
+
+var AST_Null = DEFNODE("Null", null, {
+    $documentation: "The `null` atom",
+    value: null
+}, AST_Atom);
+
+var AST_NaN = DEFNODE("NaN", null, {
+    $documentation: "The impossible value",
+    value: 0/0
+}, AST_Atom);
+
+var AST_Undefined = DEFNODE("Undefined", null, {
+    $documentation: "The `undefined` value",
+    value: (function(){}())
+}, AST_Atom);
+
+var AST_Hole = DEFNODE("Hole", null, {
+    $documentation: "A hole in an array",
+    value: (function(){}())
+}, AST_Atom);
+
+var AST_Infinity = DEFNODE("Infinity", null, {
+    $documentation: "The `Infinity` value",
+    value: 1/0
+}, AST_Atom);
+
+var AST_Boolean = DEFNODE("Boolean", null, {
+    $documentation: "Base class for booleans",
+}, AST_Atom);
+
+var AST_False = DEFNODE("False", null, {
+    $documentation: "The `false` atom",
+    value: false
+}, AST_Boolean);
+
+var AST_True = DEFNODE("True", null, {
+    $documentation: "The `true` atom",
+    value: true
+}, AST_Boolean);
+
+/* -----[ TreeWalker ]----- */
+
+function TreeWalker(callback) {
+    this.visit = callback;
+    this.stack = [];
+};
+TreeWalker.prototype = {
+    _visit: function(node, descend) {
+        this.stack.push(node);
+        var ret = this.visit(node, descend ? function(){
+            descend.call(node);
+        } : noop);
+        if (!ret && descend) {
+            descend.call(node);
+        }
+        this.stack.pop();
+        return ret;
+    },
+    parent: function(n) {
+        return this.stack[this.stack.length - 2 - (n || 0)];
+    },
+    push: function (node) {
+        this.stack.push(node);
+    },
+    pop: function() {
+        return this.stack.pop();
+    },
+    self: function() {
+        return this.stack[this.stack.length - 1];
+    },
+    find_parent: function(type) {
+        var stack = this.stack;
+        for (var i = stack.length; --i >= 0;) {
+            var x = stack[i];
+            if (x instanceof type) return x;
+        }
+    },
+    has_directive: function(type) {
+        return this.find_parent(AST_Scope).has_directive(type);
+    },
+    in_boolean_context: function() {
+        var stack = this.stack;
+        var i = stack.length, self = stack[--i];
+        while (i > 0) {
+            var p = stack[--i];
+            if ((p instanceof AST_If           && p.condition === self) ||
+                (p instanceof AST_Conditional  && p.condition === self) ||
+                (p instanceof AST_DWLoop       && p.condition === self) ||
+                (p instanceof AST_For          && p.condition === self) ||
+                (p instanceof AST_UnaryPrefix  && p.operator == "!" && p.expression === self))
+            {
+                return true;
+            }
+            if (!(p instanceof AST_Binary && (p.operator == "&&" || p.operator == "||")))
+                return false;
+            self = p;
+        }
+    },
+    loopcontrol_target: function(label) {
+        var stack = this.stack;
+        if (label) for (var i = stack.length; --i >= 0;) {
+            var x = stack[i];
+            if (x instanceof AST_LabeledStatement && x.label.name == label.name) {
+                return x.body;
+            }
+        } else for (var i = stack.length; --i >= 0;) {
+            var x = stack[i];
+            if (x instanceof AST_Switch || x instanceof AST_IterationStatement)
+                return x;
+        }
+    }
+};
+
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+    Parser based on parse-js (http://marijn.haverbeke.nl/parse-js/).
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+var KEYWORDS = 'break case catch const continue debugger default delete do else finally for function if in instanceof new return switch throw try typeof var void while with';
+var KEYWORDS_ATOM = 'false null true';
+var RESERVED_WORDS = 'abstract boolean byte char class double enum export extends final float goto implements import int interface long native package private protected public short static super synchronized this throws transient volatile yield'
+    + " " + KEYWORDS_ATOM + " " + KEYWORDS;
+var KEYWORDS_BEFORE_EXPRESSION = 'return new delete throw else case';
+
+KEYWORDS = makePredicate(KEYWORDS);
+RESERVED_WORDS = makePredicate(RESERVED_WORDS);
+KEYWORDS_BEFORE_EXPRESSION = makePredicate(KEYWORDS_BEFORE_EXPRESSION);
+KEYWORDS_ATOM = makePredicate(KEYWORDS_ATOM);
+
+var OPERATOR_CHARS = makePredicate(characters("+-*&%=<>!?|~^"));
+
+var RE_HEX_NUMBER = /^0x[0-9a-f]+$/i;
+var RE_OCT_NUMBER = /^0[0-7]+$/;
+var RE_DEC_NUMBER = /^\d*\.?\d*(?:e[+-]?\d*(?:\d\.?|\.?\d)\d*)?$/i;
+
+var OPERATORS = makePredicate([
+    "in",
+    "instanceof",
+    "typeof",
+    "new",
+    "void",
+    "delete",
+    "++",
+    "--",
+    "+",
+    "-",
+    "!",
+    "~",
+    "&",
+    "|",
+    "^",
+    "*",
+    "/",
+    "%",
+    ">>",
+    "<<",
+    ">>>",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "==",
+    "===",
+    "!=",
+    "!==",
+    "?",
+    "=",
+    "+=",
+    "-=",
+    "/=",
+    "*=",
+    "%=",
+    ">>=",
+    "<<=",
+    ">>>=",
+    "|=",
+    "^=",
+    "&=",
+    "&&",
+    "||"
+]);
+
+var WHITESPACE_CHARS = makePredicate(characters(" \u00a0\n\r\t\f\u000b\u200b\u180e\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000"));
+
+var PUNC_BEFORE_EXPRESSION = makePredicate(characters("[{(,.;:"));
+
+var PUNC_CHARS = makePredicate(characters("[]{}(),;:"));
+
+var REGEXP_MODIFIERS = makePredicate(characters("gmsiy"));
+
+/* -----[ Tokenizer ]----- */
+
+// regexps adapted from http://xregexp.com/plugins/#unicode
+var UNICODE = {
+    letter: new RegExp("[\\u0041-\\u005A\\u0061-\\u007A\\u00AA\\u00B5\\u00BA\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02C1\\u02C6-\\u02D1\\u02E0-\\u02E4\\u02EC\\u02EE\\u0370-\\u0374\\u0376\\u0377\\u037A-\\u037D\\u0386\\u0388-\\u038A\\u038C\\u038E-\\u03A1\\u03A3-\\u03F5\\u03F7-\\u0481\\u048A-\\u0523\\u0531-\\u0556\\u0559\\u0561-\\u0587\\u05D0-\\u05EA\\u05F0-\\u05F2\\u0621-\\u064A\\u066E\\u066F\\u0671-\\u06D3\\u06D5\\u06E5\\u06E6\\u06EE\\u06EF\\u06FA-\\u06FC\\u06FF\\u0710\\u0712-\\u072F\\u074D-\\u07A5\\u07B1\\u07CA-\\u07EA\\u07F4\\u07F5\\u07FA\\u0904-\\u0939\\u093D\\u0950\\u0958-\\u0961\\u0971\\u0972\\u097B-\\u097F\\u0985-\\u098C\\u098F\\u0990\\u0993-\\u09A8\\u09AA-\\u09B0\\u09B2\\u09B6-\\u09B9\\u09BD\\u09CE\\u09DC\\u09DD\\u09DF-\\u09E1\\u09F0\\u09F1\\u0A05-\\u0A0A\\u0A0F\\u0A10\\u0A13-\\u0A28\\u0A2A-\\u0A30\\u0A32\\u0A33\\u0A35\\u0A36\\u0A38\\u0A39\\u0A59-\\u0A5C\\u0A5E\\u0A72-\\u0A74\\u0A85-\\u0A8D\\u0A8F-\\u0A91\\u0A93-\\u0AA8\\u0AAA-\\u0AB0\\u0AB2\\u0AB3\\u0AB5-\\u0AB9\\u0ABD\\u0AD0\\u0AE0\\u0AE1\\u0B05-\\u0B0C\\u0B0F\\u0B10\\u0B13-\\u0B28\\u0B2A-\\u0B30\\u0B32\\u0B33\\u0B35-\\u0B39\\u0B3D\\u0B5C\\u0B5D\\u0B5F-\\u0B61\\u0B71\\u0B83\\u0B85-\\u0B8A\\u0B8E-\\u0B90\\u0B92-\\u0B95\\u0B99\\u0B9A\\u0B9C\\u0B9E\\u0B9F\\u0BA3\\u0BA4\\u0BA8-\\u0BAA\\u0BAE-\\u0BB9\\u0BD0\\u0C05-\\u0C0C\\u0C0E-\\u0C10\\u0C12-\\u0C28\\u0C2A-\\u0C33\\u0C35-\\u0C39\\u0C3D\\u0C58\\u0C59\\u0C60\\u0C61\\u0C85-\\u0C8C\\u0C8E-\\u0C90\\u0C92-\\u0CA8\\u0CAA-\\u0CB3\\u0CB5-\\u0CB9\\u0CBD\\u0CDE\\u0CE0\\u0CE1\\u0D05-\\u0D0C\\u0D0E-\\u0D10\\u0D12-\\u0D28\\u0D2A-\\u0D39\\u0D3D\\u0D60\\u0D61\\u0D7A-\\u0D7F\\u0D85-\\u0D96\\u0D9A-\\u0DB1\\u0DB3-\\u0DBB\\u0DBD\\u0DC0-\\u0DC6\\u0E01-\\u0E30\\u0E32\\u0E33\\u0E40-\\u0E46\\u0E81\\u0E82\\u0E84\\u0E87\\u0E88\\u0E8A\\u0E8D\\u0E94-\\u0E97\\u0E99-\\u0E9F\\u0EA1-\\u0EA3\\u0EA5\\u0EA7\\u0EAA\\u0EAB\\u0EAD-\\u0EB0\\u0EB2\\u0EB3\\u0EBD\\u0EC0-\\u0EC4\\u0EC6\\u0EDC\\u0EDD\\u0F00\\u0F40-\\u0F47\\u0F49-\\u0F6C\\u0F88-\\u0F8B\\u1000-\\u102A\\u103F\\u1050-\\u1055\\u105A-\\u105D\\u1061\\u1065\\u1066\\u106E-\\u1070\\u1075-\\u1081\\u108E\\u10A0-\\u10C5\\u10D0-\\u10FA\\u10FC\\u1100-\\u1159\\u115F-\\u11A2\\u11A8-\\u11F9\\u1200-\\u1248\\u124A-\\u124D\\u1250-\\u1256\\u1258\\u125A-\\u125D\\u1260-\\u1288\\u128A-\\u128D\\u1290-\\u12B0\\u12B2-\\u12B5\\u12B8-\\u12BE\\u12C0\\u12C2-\\u12C5\\u12C8-\\u12D6\\u12D8-\\u1310\\u1312-\\u1315\\u1318-\\u135A\\u1380-\\u138F\\u13A0-\\u13F4\\u1401-\\u166C\\u166F-\\u1676\\u1681-\\u169A\\u16A0-\\u16EA\\u1700-\\u170C\\u170E-\\u1711\\u1720-\\u1731\\u1740-\\u1751\\u1760-\\u176C\\u176E-\\u1770\\u1780-\\u17B3\\u17D7\\u17DC\\u1820-\\u1877\\u1880-\\u18A8\\u18AA\\u1900-\\u191C\\u1950-\\u196D\\u1970-\\u1974\\u1980-\\u19A9\\u19C1-\\u19C7\\u1A00-\\u1A16\\u1B05-\\u1B33\\u1B45-\\u1B4B\\u1B83-\\u1BA0\\u1BAE\\u1BAF\\u1C00-\\u1C23\\u1C4D-\\u1C4F\\u1C5A-\\u1C7D\\u1D00-\\u1DBF\\u1E00-\\u1F15\\u1F18-\\u1F1D\\u1F20-\\u1F45\\u1F48-\\u1F4D\\u1F50-\\u1F57\\u1F59\\u1F5B\\u1F5D\\u1F5F-\\u1F7D\\u1F80-\\u1FB4\\u1FB6-\\u1FBC\\u1FBE\\u1FC2-\\u1FC4\\u1FC6-\\u1FCC\\u1FD0-\\u1FD3\\u1FD6-\\u1FDB\\u1FE0-\\u1FEC\\u1FF2-\\u1FF4\\u1FF6-\\u1FFC\\u2071\\u207F\\u2090-\\u2094\\u2102\\u2107\\u210A-\\u2113\\u2115\\u2119-\\u211D\\u2124\\u2126\\u2128\\u212A-\\u212D\\u212F-\\u2139\\u213C-\\u213F\\u2145-\\u2149\\u214E\\u2183\\u2184\\u2C00-\\u2C2E\\u2C30-\\u2C5E\\u2C60-\\u2C6F\\u2C71-\\u2C7D\\u2C80-\\u2CE4\\u2D00-\\u2D25\\u2D30-\\u2D65\\u2D6F\\u2D80-\\u2D96\\u2DA0-\\u2DA6\\u2DA8-\\u2DAE\\u2DB0-\\u2DB6\\u2DB8-\\u2DBE\\u2DC0-\\u2DC6\\u2DC8-\\u2DCE\\u2DD0-\\u2DD6\\u2DD8-\\u2DDE\\u2E2F\\u3005\\u3006\\u3031-\\u3035\\u303B\\u303C\\u3041-\\u3096\\u309D-\\u309F\\u30A1-\\u30FA\\u30FC-\\u30FF\\u3105-\\u312D\\u3131-\\u318E\\u31A0-\\u31B7\\u31F0-\\u31FF\\u3400\\u4DB5\\u4E00\\u9FC3\\uA000-\\uA48C\\uA500-\\uA60C\\uA610-\\uA61F\\uA62A\\uA62B\\uA640-\\uA65F\\uA662-\\uA66E\\uA67F-\\uA697\\uA717-\\uA71F\\uA722-\\uA788\\uA78B\\uA78C\\uA7FB-\\uA801\\uA803-\\uA805\\uA807-\\uA80A\\uA80C-\\uA822\\uA840-\\uA873\\uA882-\\uA8B3\\uA90A-\\uA925\\uA930-\\uA946\\uAA00-\\uAA28\\uAA40-\\uAA42\\uAA44-\\uAA4B\\uAC00\\uD7A3\\uF900-\\uFA2D\\uFA30-\\uFA6A\\uFA70-\\uFAD9\\uFB00-\\uFB06\\uFB13-\\uFB17\\uFB1D\\uFB1F-\\uFB28\\uFB2A-\\uFB36\\uFB38-\\uFB3C\\uFB3E\\uFB40\\uFB41\\uFB43\\uFB44\\uFB46-\\uFBB1\\uFBD3-\\uFD3D\\uFD50-\\uFD8F\\uFD92-\\uFDC7\\uFDF0-\\uFDFB\\uFE70-\\uFE74\\uFE76-\\uFEFC\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF66-\\uFFBE\\uFFC2-\\uFFC7\\uFFCA-\\uFFCF\\uFFD2-\\uFFD7\\uFFDA-\\uFFDC]"),
+    non_spacing_mark: new RegExp("[\\u0300-\\u036F\\u0483-\\u0487\\u0591-\\u05BD\\u05BF\\u05C1\\u05C2\\u05C4\\u05C5\\u05C7\\u0610-\\u061A\\u064B-\\u065E\\u0670\\u06D6-\\u06DC\\u06DF-\\u06E4\\u06E7\\u06E8\\u06EA-\\u06ED\\u0711\\u0730-\\u074A\\u07A6-\\u07B0\\u07EB-\\u07F3\\u0816-\\u0819\\u081B-\\u0823\\u0825-\\u0827\\u0829-\\u082D\\u0900-\\u0902\\u093C\\u0941-\\u0948\\u094D\\u0951-\\u0955\\u0962\\u0963\\u0981\\u09BC\\u09C1-\\u09C4\\u09CD\\u09E2\\u09E3\\u0A01\\u0A02\\u0A3C\\u0A41\\u0A42\\u0A47\\u0A48\\u0A4B-\\u0A4D\\u0A51\\u0A70\\u0A71\\u0A75\\u0A81\\u0A82\\u0ABC\\u0AC1-\\u0AC5\\u0AC7\\u0AC8\\u0ACD\\u0AE2\\u0AE3\\u0B01\\u0B3C\\u0B3F\\u0B41-\\u0B44\\u0B4D\\u0B56\\u0B62\\u0B63\\u0B82\\u0BC0\\u0BCD\\u0C3E-\\u0C40\\u0C46-\\u0C48\\u0C4A-\\u0C4D\\u0C55\\u0C56\\u0C62\\u0C63\\u0CBC\\u0CBF\\u0CC6\\u0CCC\\u0CCD\\u0CE2\\u0CE3\\u0D41-\\u0D44\\u0D4D\\u0D62\\u0D63\\u0DCA\\u0DD2-\\u0DD4\\u0DD6\\u0E31\\u0E34-\\u0E3A\\u0E47-\\u0E4E\\u0EB1\\u0EB4-\\u0EB9\\u0EBB\\u0EBC\\u0EC8-\\u0ECD\\u0F18\\u0F19\\u0F35\\u0F37\\u0F39\\u0F71-\\u0F7E\\u0F80-\\u0F84\\u0F86\\u0F87\\u0F90-\\u0F97\\u0F99-\\u0FBC\\u0FC6\\u102D-\\u1030\\u1032-\\u1037\\u1039\\u103A\\u103D\\u103E\\u1058\\u1059\\u105E-\\u1060\\u1071-\\u1074\\u1082\\u1085\\u1086\\u108D\\u109D\\u135F\\u1712-\\u1714\\u1732-\\u1734\\u1752\\u1753\\u1772\\u1773\\u17B7-\\u17BD\\u17C6\\u17C9-\\u17D3\\u17DD\\u180B-\\u180D\\u18A9\\u1920-\\u1922\\u1927\\u1928\\u1932\\u1939-\\u193B\\u1A17\\u1A18\\u1A56\\u1A58-\\u1A5E\\u1A60\\u1A62\\u1A65-\\u1A6C\\u1A73-\\u1A7C\\u1A7F\\u1B00-\\u1B03\\u1B34\\u1B36-\\u1B3A\\u1B3C\\u1B42\\u1B6B-\\u1B73\\u1B80\\u1B81\\u1BA2-\\u1BA5\\u1BA8\\u1BA9\\u1C2C-\\u1C33\\u1C36\\u1C37\\u1CD0-\\u1CD2\\u1CD4-\\u1CE0\\u1CE2-\\u1CE8\\u1CED\\u1DC0-\\u1DE6\\u1DFD-\\u1DFF\\u20D0-\\u20DC\\u20E1\\u20E5-\\u20F0\\u2CEF-\\u2CF1\\u2DE0-\\u2DFF\\u302A-\\u302F\\u3099\\u309A\\uA66F\\uA67C\\uA67D\\uA6F0\\uA6F1\\uA802\\uA806\\uA80B\\uA825\\uA826\\uA8C4\\uA8E0-\\uA8F1\\uA926-\\uA92D\\uA947-\\uA951\\uA980-\\uA982\\uA9B3\\uA9B6-\\uA9B9\\uA9BC\\uAA29-\\uAA2E\\uAA31\\uAA32\\uAA35\\uAA36\\uAA43\\uAA4C\\uAAB0\\uAAB2-\\uAAB4\\uAAB7\\uAAB8\\uAABE\\uAABF\\uAAC1\\uABE5\\uABE8\\uABED\\uFB1E\\uFE00-\\uFE0F\\uFE20-\\uFE26]"),
+    space_combining_mark: new RegExp("[\\u0903\\u093E-\\u0940\\u0949-\\u094C\\u094E\\u0982\\u0983\\u09BE-\\u09C0\\u09C7\\u09C8\\u09CB\\u09CC\\u09D7\\u0A03\\u0A3E-\\u0A40\\u0A83\\u0ABE-\\u0AC0\\u0AC9\\u0ACB\\u0ACC\\u0B02\\u0B03\\u0B3E\\u0B40\\u0B47\\u0B48\\u0B4B\\u0B4C\\u0B57\\u0BBE\\u0BBF\\u0BC1\\u0BC2\\u0BC6-\\u0BC8\\u0BCA-\\u0BCC\\u0BD7\\u0C01-\\u0C03\\u0C41-\\u0C44\\u0C82\\u0C83\\u0CBE\\u0CC0-\\u0CC4\\u0CC7\\u0CC8\\u0CCA\\u0CCB\\u0CD5\\u0CD6\\u0D02\\u0D03\\u0D3E-\\u0D40\\u0D46-\\u0D48\\u0D4A-\\u0D4C\\u0D57\\u0D82\\u0D83\\u0DCF-\\u0DD1\\u0DD8-\\u0DDF\\u0DF2\\u0DF3\\u0F3E\\u0F3F\\u0F7F\\u102B\\u102C\\u1031\\u1038\\u103B\\u103C\\u1056\\u1057\\u1062-\\u1064\\u1067-\\u106D\\u1083\\u1084\\u1087-\\u108C\\u108F\\u109A-\\u109C\\u17B6\\u17BE-\\u17C5\\u17C7\\u17C8\\u1923-\\u1926\\u1929-\\u192B\\u1930\\u1931\\u1933-\\u1938\\u19B0-\\u19C0\\u19C8\\u19C9\\u1A19-\\u1A1B\\u1A55\\u1A57\\u1A61\\u1A63\\u1A64\\u1A6D-\\u1A72\\u1B04\\u1B35\\u1B3B\\u1B3D-\\u1B41\\u1B43\\u1B44\\u1B82\\u1BA1\\u1BA6\\u1BA7\\u1BAA\\u1C24-\\u1C2B\\u1C34\\u1C35\\u1CE1\\u1CF2\\uA823\\uA824\\uA827\\uA880\\uA881\\uA8B4-\\uA8C3\\uA952\\uA953\\uA983\\uA9B4\\uA9B5\\uA9BA\\uA9BB\\uA9BD-\\uA9C0\\uAA2F\\uAA30\\uAA33\\uAA34\\uAA4D\\uAA7B\\uABE3\\uABE4\\uABE6\\uABE7\\uABE9\\uABEA\\uABEC]"),
+    connector_punctuation: new RegExp("[\\u005F\\u203F\\u2040\\u2054\\uFE33\\uFE34\\uFE4D-\\uFE4F\\uFF3F]")
+};
+
+function is_letter(code) {
+    return (code >= 97 && code <= 122)
+        || (code >= 65 && code <= 90)
+        || (code >= 0xaa && UNICODE.letter.test(String.fromCharCode(code)));
+};
+
+function is_digit(code) {
+    return code >= 48 && code <= 57; //XXX: find out if "UnicodeDigit" means something else than 0..9
+};
+
+function is_alphanumeric_char(code) {
+    return is_digit(code) || is_letter(code);
+};
+
+function is_unicode_combining_mark(ch) {
+    return UNICODE.non_spacing_mark.test(ch) || UNICODE.space_combining_mark.test(ch);
+};
+
+function is_unicode_connector_punctuation(ch) {
+    return UNICODE.connector_punctuation.test(ch);
+};
+
+function is_identifier(name) {
+    return !RESERVED_WORDS(name) && /^[a-z_$][a-z0-9_$]*$/i.test(name);
+};
+
+function is_identifier_start(code) {
+    return code == 36 || code == 95 || is_letter(code);
+};
+
+function is_identifier_char(ch) {
+    var code = ch.charCodeAt(0);
+    return is_identifier_start(code)
+        || is_digit(code)
+        || code == 8204 // \u200c: zero-width non-joiner <ZWNJ>
+        || code == 8205 // \u200d: zero-width joiner <ZWJ> (in my ECMA-262 PDF, this is also 200c)
+        || is_unicode_combining_mark(ch)
+        || is_unicode_connector_punctuation(ch)
+    ;
+};
+
+function is_identifier_string(str){
+    var i = str.length;
+    if (i == 0) return false;
+    if (!is_identifier_start(str.charCodeAt(0))) return false;
+    while (--i >= 0) {
+        if (!is_identifier_char(str.charAt(i)))
+            return false;
+    }
+    return true;
+};
+
+function parse_js_number(num) {
+    if (RE_HEX_NUMBER.test(num)) {
+        return parseInt(num.substr(2), 16);
+    } else if (RE_OCT_NUMBER.test(num)) {
+        return parseInt(num.substr(1), 8);
+    } else if (RE_DEC_NUMBER.test(num)) {
+        return parseFloat(num);
+    }
+};
+
+function JS_Parse_Error(message, line, col, pos) {
+    this.message = message;
+    this.line = line;
+    this.col = col;
+    this.pos = pos;
+    this.stack = new Error().stack;
+};
+
+JS_Parse_Error.prototype.toString = function() {
+    return this.message + " (line: " + this.line + ", col: " + this.col + ", pos: " + this.pos + ")" + "\n\n" + this.stack;
+};
+
+function js_error(message, filename, line, col, pos) {
+    throw new JS_Parse_Error(message, line, col, pos);
+};
+
+function is_token(token, type, val) {
+    return token.type == type && (val == null || token.value == val);
+};
+
+var EX_EOF = {};
+
+function tokenizer($TEXT, filename, html5_comments) {
+
+    var S = {
+        text            : $TEXT.replace(/\r\n?|[\n\u2028\u2029]/g, "\n").replace(/\uFEFF/g, ''),
+        filename        : filename,
+        pos             : 0,
+        tokpos          : 0,
+        line            : 1,
+        tokline         : 0,
+        col             : 0,
+        tokcol          : 0,
+        newline_before  : false,
+        regex_allowed   : false,
+        comments_before : []
+    };
+
+    function peek() { return S.text.charAt(S.pos); };
+
+    function next(signal_eof, in_string) {
+        var ch = S.text.charAt(S.pos++);
+        if (signal_eof && !ch)
+            throw EX_EOF;
+        if (ch == "\n") {
+            S.newline_before = S.newline_before || !in_string;
+            ++S.line;
+            S.col = 0;
+        } else {
+            ++S.col;
+        }
+        return ch;
+    };
+
+    function forward(i) {
+        while (i-- > 0) next();
+    };
+
+    function looking_at(str) {
+        return S.text.substr(S.pos, str.length) == str;
+    };
+
+    function find(what, signal_eof) {
+        var pos = S.text.indexOf(what, S.pos);
+        if (signal_eof && pos == -1) throw EX_EOF;
+        return pos;
+    };
+
+    function start_token() {
+        S.tokline = S.line;
+        S.tokcol = S.col;
+        S.tokpos = S.pos;
+    };
+
+    var prev_was_dot = false;
+    function token(type, value, is_comment) {
+        S.regex_allowed = ((type == "operator" && !UNARY_POSTFIX(value)) ||
+                           (type == "keyword" && KEYWORDS_BEFORE_EXPRESSION(value)) ||
+                           (type == "punc" && PUNC_BEFORE_EXPRESSION(value)));
+        prev_was_dot = (type == "punc" && value == ".");
+        var ret = {
+            type   : type,
+            value  : value,
+            line   : S.tokline,
+            col    : S.tokcol,
+            pos    : S.tokpos,
+            endpos : S.pos,
+            nlb    : S.newline_before,
+            file   : filename
+        };
+        if (!is_comment) {
+            ret.comments_before = S.comments_before;
+            S.comments_before = [];
+            // make note of any newlines in the comments that came before
+            for (var i = 0, len = ret.comments_before.length; i < len; i++) {
+                ret.nlb = ret.nlb || ret.comments_before[i].nlb;
+            }
+        }
+        S.newline_before = false;
+        return new AST_Token(ret);
+    };
+
+    function skip_whitespace() {
+        while (WHITESPACE_CHARS(peek()))
             next();
-            return is_digit(peek().charCodeAt(0)) ? read_num(".") : token("punc", ".");
-        }
-        function read_word() {
-            var word = read_name();
-            return KEYWORDS_ATOM(word) ? token("atom", word) : !KEYWORDS(word) ? token("name", word) : OPERATORS(word) ? token("operator", word) : token("keyword", word);
-        }
-        function with_eof_error(eof_error, cont) {
-            return function(x) {
-                try {
-                    return cont(x);
-                } catch (ex) {
-                    if (ex === EX_EOF) parse_error(eof_error); else throw ex;
-                }
-            };
-        }
-        function next_token(force_regexp) {
-            if (force_regexp != null) return read_regexp(force_regexp);
-            skip_whitespace();
-            start_token();
-            var ch = peek();
-            if (!ch) return token("eof");
+    };
+
+    function read_while(pred) {
+        var ret = "", ch, i = 0;
+        while ((ch = peek()) && pred(ch, i++))
+            ret += next();
+        return ret;
+    };
+
+    function parse_error(err) {
+        js_error(err, filename, S.tokline, S.tokcol, S.tokpos);
+    };
+
+    function read_num(prefix) {
+        var has_e = false, after_e = false, has_x = false, has_dot = prefix == ".";
+        var num = read_while(function(ch, i){
             var code = ch.charCodeAt(0);
             switch (code) {
-              case 34:
-              case 39:
-                return read_string();
-
-              case 46:
-                return handle_dot();
-
-              case 47:
-                return handle_slash();
+              case 120: case 88: // xX
+                return has_x ? false : (has_x = true);
+              case 101: case 69: // eE
+                return has_x ? true : has_e ? false : (has_e = after_e = true);
+              case 45: // -
+                return after_e || (i == 0 && !prefix);
+              case 43: // +
+                return after_e;
+              case (after_e = false, 46): // .
+                return (!has_dot && !has_x && !has_e) ? (has_dot = true) : false;
             }
-            if (is_digit(code)) return read_num();
-            if (PUNC_CHARS(ch)) return token("punc", next());
-            if (OPERATOR_CHARS(ch)) return read_operator();
-            if (code == 92 || is_identifier_start(code)) return read_word();
-            parse_error("Unexpected character '" + ch + "'");
-        }
-        next_token.context = function(nc) {
-            if (nc) S = nc;
-            return S;
-        };
-        return next_token;
-    }
-    var UNARY_PREFIX = makePredicate([ "typeof", "void", "delete", "--", "++", "!", "~", "-", "+" ]);
-    var UNARY_POSTFIX = makePredicate([ "--", "++" ]);
-    var ASSIGNMENT = makePredicate([ "=", "+=", "-=", "/=", "*=", "%=", ">>=", "<<=", ">>>=", "|=", "^=", "&=" ]);
-    var PRECEDENCE = function(a, ret) {
-        for (var i = 0, n = 1; i < a.length; ++i, ++n) {
-            var b = a[i];
-            for (var j = 0; j < b.length; ++j) {
-                ret[b[j]] = n;
-            }
-        }
-        return ret;
-    }([ [ "||" ], [ "&&" ], [ "|" ], [ "^" ], [ "&" ], [ "==", "===", "!=", "!==" ], [ "<", ">", "<=", ">=", "in", "instanceof" ], [ ">>", "<<", ">>>" ], [ "+", "-" ], [ "*", "/", "%" ] ], {});
-    var STATEMENTS_WITH_LABELS = array_to_hash([ "for", "do", "while", "switch" ]);
-    var ATOMIC_START_TOKEN = array_to_hash([ "atom", "num", "string", "regexp", "name" ]);
-    function parse($TEXT, options) {
-        options = defaults(options, {
-            strict: false,
-            filename: null,
-            toplevel: null
+            return is_alphanumeric_char(code);
         });
-        var S = {
-            input: typeof $TEXT == "string" ? tokenizer($TEXT, options.filename) : $TEXT,
-            token: null,
-            prev: null,
-            peeked: null,
-            in_function: 0,
-            in_directives: true,
-            in_loop: 0,
-            labels: []
-        };
-        S.token = next();
-        function is(type, value) {
-            return is_token(S.token, type, value);
-        }
-        function peek() {
-            return S.peeked || (S.peeked = S.input());
-        }
-        function next() {
-            S.prev = S.token;
-            if (S.peeked) {
-                S.token = S.peeked;
-                S.peeked = null;
-            } else {
-                S.token = S.input();
-            }
-            S.in_directives = S.in_directives && (S.token.type == "string" || is("punc", ";"));
-            return S.token;
-        }
-        function prev() {
-            return S.prev;
-        }
-        function croak(msg, line, col, pos) {
-            var ctx = S.input.context();
-            js_error(msg, ctx.filename, line != null ? line : ctx.tokline, col != null ? col : ctx.tokcol, pos != null ? pos : ctx.tokpos);
-        }
-        function token_error(token, msg) {
-            croak(msg, token.line, token.col);
-        }
-        function unexpected(token) {
-            if (token == null) token = S.token;
-            token_error(token, "Unexpected token: " + token.type + " (" + token.value + ")");
-        }
-        function expect_token(type, val) {
-            if (is(type, val)) {
-                return next();
-            }
-            token_error(S.token, "Unexpected token " + S.token.type + " Â«" + S.token.value + "Â»" + ", expected " + type + " Â«" + val + "Â»");
-        }
-        function expect(punc) {
-            return expect_token("punc", punc);
-        }
-        function can_insert_semicolon() {
-            return !options.strict && (S.token.nlb || is("eof") || is("punc", "}"));
-        }
-        function semicolon() {
-            if (is("punc", ";")) next(); else if (!can_insert_semicolon()) unexpected();
-        }
-        function parenthesised() {
-            expect("(");
-            var exp = expression(true);
-            expect(")");
-            return exp;
-        }
-        function embed_tokens(parser) {
-            return function() {
-                var start = S.token;
-                var expr = parser();
-                var end = prev();
-                expr.start = start;
-                expr.end = end;
-                return expr;
-            };
-        }
-        var statement = embed_tokens(function() {
-            var tmp;
-            if (is("operator", "/") || is("operator", "/=")) {
-                S.peeked = null;
-                S.token = S.input(S.token.value.substr(1));
-            }
-            switch (S.token.type) {
-              case "string":
-                var dir = S.in_directives, stat = simple_statement();
-                if (dir && stat.body instanceof AST_String && !is("punc", ",")) return new AST_Directive({
-                    value: stat.body.value
-                });
-                return stat;
-
-              case "num":
-              case "regexp":
-              case "operator":
-              case "atom":
-                return simple_statement();
-
-              case "name":
-                return is_token(peek(), "punc", ":") ? labeled_statement() : simple_statement();
-
-              case "punc":
-                switch (S.token.value) {
-                  case "{":
-                    return new AST_BlockStatement({
-                        start: S.token,
-                        body: block_(),
-                        end: prev()
-                    });
-
-                  case "[":
-                  case "(":
-                    return simple_statement();
-
-                  case ";":
-                    next();
-                    return new AST_EmptyStatement();
-
-                  default:
-                    unexpected();
-                }
-
-              case "keyword":
-                switch (tmp = S.token.value, next(), tmp) {
-                  case "break":
-                    return break_cont(AST_Break);
-
-                  case "continue":
-                    return break_cont(AST_Continue);
-
-                  case "debugger":
-                    semicolon();
-                    return new AST_Debugger();
-
-                  case "do":
-                    return new AST_Do({
-                        body: in_loop(statement),
-                        condition: (expect_token("keyword", "while"), tmp = parenthesised(), semicolon(), 
-                        tmp)
-                    });
-
-                  case "while":
-                    return new AST_While({
-                        condition: parenthesised(),
-                        body: in_loop(statement)
-                    });
-
-                  case "for":
-                    return for_();
-
-                  case "function":
-                    return function_(true);
-
-                  case "if":
-                    return if_();
-
-                  case "return":
-                    if (S.in_function == 0) croak("'return' outside of function");
-                    return new AST_Return({
-                        value: is("punc", ";") ? (next(), null) : can_insert_semicolon() ? null : (tmp = expression(true), 
-                        semicolon(), tmp)
-                    });
-
-                  case "switch":
-                    return new AST_Switch({
-                        expression: parenthesised(),
-                        body: in_loop(switch_body_)
-                    });
-
-                  case "throw":
-                    if (S.token.nlb) croak("Illegal newline after 'throw'");
-                    return new AST_Throw({
-                        value: (tmp = expression(true), semicolon(), tmp)
-                    });
-
-                  case "try":
-                    return try_();
-
-                  case "var":
-                    return tmp = var_(), semicolon(), tmp;
-
-                  case "const":
-                    return tmp = const_(), semicolon(), tmp;
-
-                  case "with":
-                    return new AST_With({
-                        expression: parenthesised(),
-                        body: statement()
-                    });
-
-                  default:
-                    unexpected();
-                }
-            }
-        });
-        function labeled_statement() {
-            var label = as_symbol(AST_Label);
-            if (find_if(function(l) {
-                return l.name == label.name;
-            }, S.labels)) {
-                croak("Label " + label.name + " defined twice");
-            }
-            expect(":");
-            S.labels.push(label);
-            var stat = statement();
-            S.labels.pop();
-            return new AST_LabeledStatement({
-                body: stat,
-                label: label
-            });
-        }
-        function simple_statement(tmp) {
-            return new AST_SimpleStatement({
-                body: (tmp = expression(true), semicolon(), tmp)
-            });
-        }
-        function break_cont(type) {
-            var label = null;
-            if (!can_insert_semicolon()) {
-                label = as_symbol(AST_LabelRef, true);
-            }
-            if (label != null) {
-                if (!find_if(function(l) {
-                    return l.name == label.name;
-                }, S.labels)) croak("Undefined label " + label.name);
-            } else if (S.in_loop == 0) croak(type.TYPE + " not inside a loop or switch");
-            semicolon();
-            return new type({
-                label: label
-            });
-        }
-        function for_() {
-            expect("(");
-            var init = null;
-            if (!is("punc", ";")) {
-                init = is("keyword", "var") ? (next(), var_(true)) : expression(true, true);
-                if (is("operator", "in")) {
-                    if (init instanceof AST_Var && init.definitions.length > 1) croak("Only one variable declaration allowed in for..in loop");
-                    next();
-                    return for_in(init);
-                }
-            }
-            return regular_for(init);
-        }
-        function regular_for(init) {
-            expect(";");
-            var test = is("punc", ";") ? null : expression(true);
-            expect(";");
-            var step = is("punc", ")") ? null : expression(true);
-            expect(")");
-            return new AST_For({
-                init: init,
-                condition: test,
-                step: step,
-                body: in_loop(statement)
-            });
-        }
-        function for_in(init) {
-            var lhs = init instanceof AST_Var ? init.definitions[0].name : null;
-            var obj = expression(true);
-            expect(")");
-            return new AST_ForIn({
-                init: init,
-                name: lhs,
-                object: obj,
-                body: in_loop(statement)
-            });
-        }
-        var function_ = function(in_statement, ctor) {
-            var name = is("name") ? as_symbol(in_statement ? AST_SymbolDefun : ctor === AST_Accessor ? AST_SymbolAccessor : AST_SymbolLambda) : null;
-            if (in_statement && !name) unexpected();
-            expect("(");
-            if (!ctor) ctor = in_statement ? AST_Defun : AST_Function;
-            return new ctor({
-                name: name,
-                argnames: function(first, a) {
-                    while (!is("punc", ")")) {
-                        if (first) first = false; else expect(",");
-                        a.push(as_symbol(AST_SymbolFunarg));
-                    }
-                    next();
-                    return a;
-                }(true, []),
-                body: function(loop, labels) {
-                    ++S.in_function;
-                    S.in_directives = true;
-                    S.in_loop = 0;
-                    S.labels = [];
-                    var a = block_();
-                    --S.in_function;
-                    S.in_loop = loop;
-                    S.labels = labels;
-                    return a;
-                }(S.in_loop, S.labels)
-            });
-        };
-        function if_() {
-            var cond = parenthesised(), body = statement(), belse = null;
-            if (is("keyword", "else")) {
-                next();
-                belse = statement();
-            }
-            return new AST_If({
-                condition: cond,
-                body: body,
-                alternative: belse
-            });
-        }
-        function block_() {
-            expect("{");
-            var a = [];
-            while (!is("punc", "}")) {
-                if (is("eof")) unexpected();
-                a.push(statement());
-            }
-            next();
-            return a;
-        }
-        function switch_body_() {
-            expect("{");
-            var a = [], cur = null, branch = null, tmp;
-            while (!is("punc", "}")) {
-                if (is("eof")) unexpected();
-                if (is("keyword", "case")) {
-                    if (branch) branch.end = prev();
-                    cur = [];
-                    branch = new AST_Case({
-                        start: (tmp = S.token, next(), tmp),
-                        expression: expression(true),
-                        body: cur
-                    });
-                    a.push(branch);
-                    expect(":");
-                } else if (is("keyword", "default")) {
-                    if (branch) branch.end = prev();
-                    cur = [];
-                    branch = new AST_Default({
-                        start: (tmp = S.token, next(), expect(":"), tmp),
-                        body: cur
-                    });
-                    a.push(branch);
-                } else {
-                    if (!cur) unexpected();
-                    cur.push(statement());
-                }
-            }
-            if (branch) branch.end = prev();
-            next();
-            return a;
-        }
-        function try_() {
-            var body = block_(), bcatch = null, bfinally = null;
-            if (is("keyword", "catch")) {
-                var start = S.token;
-                next();
-                expect("(");
-                var name = as_symbol(AST_SymbolCatch);
-                expect(")");
-                bcatch = new AST_Catch({
-                    start: start,
-                    argname: name,
-                    body: block_(),
-                    end: prev()
-                });
-            }
-            if (is("keyword", "finally")) {
-                var start = S.token;
-                next();
-                bfinally = new AST_Finally({
-                    start: start,
-                    body: block_(),
-                    end: prev()
-                });
-            }
-            if (!bcatch && !bfinally) croak("Missing catch/finally blocks");
-            return new AST_Try({
-                body: body,
-                bcatch: bcatch,
-                bfinally: bfinally
-            });
-        }
-        function vardefs(no_in, in_const) {
-            var a = [];
-            for (;;) {
-                a.push(new AST_VarDef({
-                    start: S.token,
-                    name: as_symbol(in_const ? AST_SymbolConst : AST_SymbolVar),
-                    value: is("operator", "=") ? (next(), expression(false, no_in)) : null,
-                    end: prev()
-                }));
-                if (!is("punc", ",")) break;
-                next();
-            }
-            return a;
-        }
-        var var_ = function(no_in) {
-            return new AST_Var({
-                start: prev(),
-                definitions: vardefs(no_in, false),
-                end: prev()
-            });
-        };
-        var const_ = function() {
-            return new AST_Const({
-                start: prev(),
-                definitions: vardefs(false, true),
-                end: prev()
-            });
-        };
-        var new_ = function() {
-            var start = S.token;
-            expect_token("operator", "new");
-            var newexp = expr_atom(false), args;
-            if (is("punc", "(")) {
-                next();
-                args = expr_list(")");
-            } else {
-                args = [];
-            }
-            return subscripts(new AST_New({
-                start: start,
-                expression: newexp,
-                args: args,
-                end: prev()
-            }), true);
-        };
-        function as_atom_node() {
-            var tok = S.token, ret;
-            switch (tok.type) {
-              case "name":
-                return as_symbol(AST_SymbolRef);
-
-              case "num":
-                ret = new AST_Number({
-                    start: tok,
-                    end: tok,
-                    value: tok.value
-                });
-                break;
-
-              case "string":
-                ret = new AST_String({
-                    start: tok,
-                    end: tok,
-                    value: tok.value
-                });
-                break;
-
-              case "regexp":
-                ret = new AST_RegExp({
-                    start: tok,
-                    end: tok,
-                    value: tok.value
-                });
-                break;
-
-              case "atom":
-                switch (tok.value) {
-                  case "false":
-                    ret = new AST_False({
-                        start: tok,
-                        end: tok
-                    });
-                    break;
-
-                  case "true":
-                    ret = new AST_True({
-                        start: tok,
-                        end: tok
-                    });
-                    break;
-
-                  case "null":
-                    ret = new AST_Null({
-                        start: tok,
-                        end: tok
-                    });
-                    break;
-                }
-                break;
-            }
-            next();
-            return ret;
-        }
-        var expr_atom = function(allow_calls) {
-            if (is("operator", "new")) {
-                return new_();
-            }
-            var start = S.token;
-            if (is("punc")) {
-                switch (start.value) {
-                  case "(":
-                    next();
-                    var ex = expression(true);
-                    ex.start = start;
-                    ex.end = S.token;
-                    expect(")");
-                    return subscripts(ex, allow_calls);
-
-                  case "[":
-                    return subscripts(array_(), allow_calls);
-
-                  case "{":
-                    return subscripts(object_(), allow_calls);
-                }
-                unexpected();
-            }
-            if (is("keyword", "function")) {
-                next();
-                var func = function_(false);
-                func.start = start;
-                func.end = prev();
-                return subscripts(func, allow_calls);
-            }
-            if (ATOMIC_START_TOKEN[S.token.type]) {
-                return subscripts(as_atom_node(), allow_calls);
-            }
-            unexpected();
-        };
-        function expr_list(closing, allow_trailing_comma, allow_empty) {
-            var first = true, a = [];
-            while (!is("punc", closing)) {
-                if (first) first = false; else expect(",");
-                if (allow_trailing_comma && is("punc", closing)) break;
-                if (is("punc", ",") && allow_empty) {
-                    a.push(new AST_Undefined({
-                        start: S.token,
-                        end: S.token
-                    }));
-                } else {
-                    a.push(expression(false));
-                }
-            }
-            next();
-            return a;
-        }
-        var array_ = embed_tokens(function() {
-            expect("[");
-            return new AST_Array({
-                elements: expr_list("]", !options.strict, true)
-            });
-        });
-        var object_ = embed_tokens(function() {
-            expect("{");
-            var first = true, a = [];
-            while (!is("punc", "}")) {
-                if (first) first = false; else expect(",");
-                if (!options.strict && is("punc", "}")) break;
-                var start = S.token;
-                var type = start.type;
-                var name = as_property_name();
-                if (type == "name" && !is("punc", ":")) {
-                    if (name == "get") {
-                        a.push(new AST_ObjectGetter({
-                            start: start,
-                            key: name,
-                            value: function_(false, AST_Accessor),
-                            end: prev()
-                        }));
-                        continue;
-                    }
-                    if (name == "set") {
-                        a.push(new AST_ObjectSetter({
-                            start: start,
-                            key: name,
-                            value: function_(false, AST_Accessor),
-                            end: prev()
-                        }));
-                        continue;
-                    }
-                }
-                expect(":");
-                a.push(new AST_ObjectKeyVal({
-                    start: start,
-                    key: name,
-                    value: expression(false),
-                    end: prev()
-                }));
-            }
-            next();
-            return new AST_Object({
-                properties: a
-            });
-        });
-        function as_property_name() {
-            var tmp = S.token;
-            next();
-            switch (tmp.type) {
-              case "num":
-              case "string":
-              case "name":
-              case "operator":
-              case "keyword":
-              case "atom":
-                return tmp.value;
-
-              default:
-                unexpected();
-            }
-        }
-        function as_name() {
-            var tmp = S.token;
-            next();
-            switch (tmp.type) {
-              case "name":
-              case "operator":
-              case "keyword":
-              case "atom":
-                return tmp.value;
-
-              default:
-                unexpected();
-            }
-        }
-        function as_symbol(type, noerror) {
-            if (!is("name")) {
-                if (!noerror) croak("Name expected");
-                return null;
-            }
-            var name = S.token.value;
-            var sym = new (name == "this" ? AST_This : type)({
-                name: String(S.token.value),
-                start: S.token,
-                end: S.token
-            });
-            next();
-            return sym;
-        }
-        var subscripts = function(expr, allow_calls) {
-            var start = expr.start;
-            if (is("punc", ".")) {
-                next();
-                return subscripts(new AST_Dot({
-                    start: start,
-                    expression: expr,
-                    property: as_name(),
-                    end: prev()
-                }), allow_calls);
-            }
-            if (is("punc", "[")) {
-                next();
-                var prop = expression(true);
-                expect("]");
-                return subscripts(new AST_Sub({
-                    start: start,
-                    expression: expr,
-                    property: prop,
-                    end: prev()
-                }), allow_calls);
-            }
-            if (allow_calls && is("punc", "(")) {
-                next();
-                return subscripts(new AST_Call({
-                    start: start,
-                    expression: expr,
-                    args: expr_list(")"),
-                    end: prev()
-                }), true);
-            }
-            return expr;
-        };
-        var maybe_unary = function(allow_calls) {
-            var start = S.token;
-            if (is("operator") && UNARY_PREFIX(start.value)) {
-                next();
-                var ex = make_unary(AST_UnaryPrefix, start.value, maybe_unary(allow_calls));
-                ex.start = start;
-                ex.end = prev();
-                return ex;
-            }
-            var val = expr_atom(allow_calls);
-            while (is("operator") && UNARY_POSTFIX(S.token.value) && !S.token.nlb) {
-                val = make_unary(AST_UnaryPostfix, S.token.value, val);
-                val.start = start;
-                val.end = S.token;
-                next();
-            }
-            return val;
-        };
-        function make_unary(ctor, op, expr) {
-            if ((op == "++" || op == "--") && !is_assignable(expr)) croak("Invalid use of " + op + " operator");
-            return new ctor({
-                operator: op,
-                expression: expr
-            });
-        }
-        var expr_op = function(left, min_prec, no_in) {
-            var op = is("operator") ? S.token.value : null;
-            if (op == "in" && no_in) op = null;
-            var prec = op != null ? PRECEDENCE[op] : null;
-            if (prec != null && prec > min_prec) {
-                next();
-                var right = expr_op(maybe_unary(true), prec, no_in);
-                return expr_op(new AST_Binary({
-                    start: left.start,
-                    left: left,
-                    operator: op,
-                    right: right,
-                    end: right.end
-                }), min_prec, no_in);
-            }
-            return left;
-        };
-        function expr_ops(no_in) {
-            return expr_op(maybe_unary(true), 0, no_in);
-        }
-        var maybe_conditional = function(no_in) {
-            var start = S.token;
-            var expr = expr_ops(no_in);
-            if (is("operator", "?")) {
-                next();
-                var yes = expression(false);
-                expect(":");
-                return new AST_Conditional({
-                    start: start,
-                    condition: expr,
-                    consequent: yes,
-                    alternative: expression(false, no_in),
-                    end: peek()
-                });
-            }
-            return expr;
-        };
-        function is_assignable(expr) {
-            if (!options.strict) return true;
-            switch (expr[0] + "") {
-              case "dot":
-              case "sub":
-              case "new":
-              case "call":
-                return true;
-
-              case "name":
-                return expr[1] != "this";
-            }
-        }
-        var maybe_assign = function(no_in) {
-            var start = S.token;
-            var left = maybe_conditional(no_in), val = S.token.value;
-            if (is("operator") && ASSIGNMENT(val)) {
-                if (is_assignable(left)) {
-                    next();
-                    return new AST_Assign({
-                        start: start,
-                        left: left,
-                        operator: val,
-                        right: maybe_assign(no_in),
-                        end: peek()
-                    });
-                }
-                croak("Invalid assignment");
-            }
-            return left;
-        };
-        var expression = function(commas, no_in) {
-            var start = S.token;
-            var expr = maybe_assign(no_in);
-            if (commas && is("punc", ",")) {
-                next();
-                return new AST_Seq({
-                    start: start,
-                    car: expr,
-                    cdr: expression(true, no_in),
-                    end: peek()
-                });
-            }
-            return expr;
-        };
-        function in_loop(cont) {
-            ++S.in_loop;
-            var ret = cont();
-            --S.in_loop;
-            return ret;
-        }
-        return function() {
-            var start = S.token;
-            var body = [];
-            while (!is("eof")) body.push(statement());
-            var end = prev();
-            var toplevel = options.toplevel;
-            if (toplevel) {
-                toplevel.body = toplevel.body.concat(body);
-                toplevel.end = end;
-            } else {
-                toplevel = new AST_Toplevel({
-                    start: start,
-                    body: body,
-                    end: end
-                });
-            }
-            return toplevel;
-        }();
-    }
-    "use strict";
-    function TreeTransformer(before, after) {
-        TreeWalker.call(this);
-        this.before = before;
-        this.after = after;
-    }
-    TreeTransformer.prototype = new TreeWalker();
-    (function(undefined) {
-        function _(node, descend) {
-            node.DEFMETHOD("transform", function(tw, in_list) {
-                var x, y;
-                tw.push(this);
-                if (tw.before) x = tw.before(this, descend, in_list);
-                if (x === undefined) {
-                    if (!tw.after) {
-                        x = this;
-                        descend(x, tw);
-                    } else {
-                        tw.stack[tw.stack - 1] = x = this.clone();
-                        descend(x, tw);
-                        y = tw.after(x, in_list);
-                        if (y !== undefined) x = y;
-                    }
-                }
-                tw.pop();
-                return x;
-            });
-        }
-        function do_list(list, tw) {
-            return MAP(list, function(node) {
-                return node.transform(tw, true);
-            });
-        }
-        _(AST_Node, noop);
-        _(AST_LabeledStatement, function(self, tw) {
-            self.label = self.label.transform(tw);
-            self.body = self.body.transform(tw);
-        });
-        _(AST_SimpleStatement, function(self, tw) {
-            self.body = self.body.transform(tw);
-        });
-        _(AST_Block, function(self, tw) {
-            self.body = do_list(self.body, tw);
-        });
-        _(AST_DWLoop, function(self, tw) {
-            self.condition = self.condition.transform(tw);
-            self.body = self.body.transform(tw);
-        });
-        _(AST_For, function(self, tw) {
-            if (self.init) self.init = self.init.transform(tw);
-            if (self.condition) self.condition = self.condition.transform(tw);
-            if (self.step) self.step = self.step.transform(tw);
-            self.body = self.body.transform(tw);
-        });
-        _(AST_ForIn, function(self, tw) {
-            self.init = self.init.transform(tw);
-            self.object = self.object.transform(tw);
-            self.body = self.body.transform(tw);
-        });
-        _(AST_With, function(self, tw) {
-            self.expression = self.expression.transform(tw);
-            self.body = self.body.transform(tw);
-        });
-        _(AST_Exit, function(self, tw) {
-            if (self.value) self.value = self.value.transform(tw);
-        });
-        _(AST_LoopControl, function(self, tw) {
-            if (self.label) self.label = self.label.transform(tw);
-        });
-        _(AST_If, function(self, tw) {
-            self.condition = self.condition.transform(tw);
-            self.body = self.body.transform(tw);
-            if (self.alternative) self.alternative = self.alternative.transform(tw);
-        });
-        _(AST_Switch, function(self, tw) {
-            self.expression = self.expression.transform(tw);
-            self.body = do_list(self.body, tw);
-        });
-        _(AST_Case, function(self, tw) {
-            self.expression = self.expression.transform(tw);
-            self.body = do_list(self.body, tw);
-        });
-        _(AST_Try, function(self, tw) {
-            self.body = do_list(self.body, tw);
-            if (self.bcatch) self.bcatch = self.bcatch.transform(tw);
-            if (self.bfinally) self.bfinally = self.bfinally.transform(tw);
-        });
-        _(AST_Catch, function(self, tw) {
-            self.argname = self.argname.transform(tw);
-            self.body = do_list(self.body, tw);
-        });
-        _(AST_Definitions, function(self, tw) {
-            self.definitions = do_list(self.definitions, tw);
-        });
-        _(AST_VarDef, function(self, tw) {
-            if (self.value) self.value = self.value.transform(tw);
-        });
-        _(AST_Lambda, function(self, tw) {
-            if (self.name) self.name = self.name.transform(tw);
-            self.argnames = do_list(self.argnames, tw);
-            self.body = do_list(self.body, tw);
-        });
-        _(AST_Call, function(self, tw) {
-            self.expression = self.expression.transform(tw);
-            self.args = do_list(self.args, tw);
-        });
-        _(AST_Seq, function(self, tw) {
-            self.car = self.car.transform(tw);
-            self.cdr = self.cdr.transform(tw);
-        });
-        _(AST_Dot, function(self, tw) {
-            self.expression = self.expression.transform(tw);
-        });
-        _(AST_Sub, function(self, tw) {
-            self.expression = self.expression.transform(tw);
-            self.property = self.property.transform(tw);
-        });
-        _(AST_Unary, function(self, tw) {
-            self.expression = self.expression.transform(tw);
-        });
-        _(AST_Binary, function(self, tw) {
-            self.left = self.left.transform(tw);
-            self.right = self.right.transform(tw);
-        });
-        _(AST_Conditional, function(self, tw) {
-            self.condition = self.condition.transform(tw);
-            self.consequent = self.consequent.transform(tw);
-            self.alternative = self.alternative.transform(tw);
-        });
-        _(AST_Array, function(self, tw) {
-            self.elements = do_list(self.elements, tw);
-        });
-        _(AST_Object, function(self, tw) {
-            self.properties = do_list(self.properties, tw);
-        });
-        _(AST_ObjectProperty, function(self, tw) {
-            self.value = self.value.transform(tw);
-        });
-    })();
-    "use strict";
-    function SymbolDef(scope, index, orig) {
-        this.name = orig.name;
-        this.orig = [ orig ];
-        this.scope = scope;
-        this.references = [];
-        this.global = false;
-        this.mangled_name = null;
-        this.undeclared = false;
-        this.constant = false;
-        this.index = index;
-    }
-    SymbolDef.prototype = {
-        unmangleable: function(options) {
-            return this.global || this.undeclared || !(options && options.eval) && (this.scope.uses_eval || this.scope.uses_with);
-        },
-        mangle: function(options) {
-            if (!this.mangled_name && !this.unmangleable(options)) this.mangled_name = this.scope.next_mangled(options);
+        if (prefix) num = prefix + num;
+        var valid = parse_js_number(num);
+        if (!isNaN(valid)) {
+            return token("num", valid);
+        } else {
+            parse_error("Invalid syntax: " + num);
         }
     };
-    AST_Toplevel.DEFMETHOD("figure_out_scope", function() {
-        var self = this;
-        var scope = self.parent_scope = null;
-        var labels = new Dictionary();
-        var nesting = 0;
-        var tw = new TreeWalker(function(node, descend) {
-            if (node instanceof AST_Scope) {
-                node.init_scope_vars(nesting);
-                var save_scope = node.parent_scope = scope;
-                ++nesting;
-                scope = node;
-                descend();
-                scope = save_scope;
-                --nesting;
-                return true;
+
+    function read_escaped_char(in_string) {
+        var ch = next(true, in_string);
+        switch (ch.charCodeAt(0)) {
+          case 110 : return "\n";
+          case 114 : return "\r";
+          case 116 : return "\t";
+          case 98  : return "\b";
+          case 118 : return "\u000b"; // \v
+          case 102 : return "\f";
+          case 48  : return "\0";
+          case 120 : return String.fromCharCode(hex_bytes(2)); // \x
+          case 117 : return String.fromCharCode(hex_bytes(4)); // \u
+          case 10  : return ""; // newline
+          default  : return ch;
+        }
+    };
+
+    function hex_bytes(n) {
+        var num = 0;
+        for (; n > 0; --n) {
+            var digit = parseInt(next(true), 16);
+            if (isNaN(digit))
+                parse_error("Invalid hex-character pattern in string");
+            num = (num << 4) | digit;
+        }
+        return num;
+    };
+
+    var read_string = with_eof_error("Unterminated string constant", function(){
+        var quote = next(), ret = "";
+        for (;;) {
+            var ch = next(true);
+            if (ch == "\\") {
+                // read OctalEscapeSequence (XXX: deprecated if "strict mode")
+                // https://github.com/mishoo/UglifyJS/issues/178
+                var octal_len = 0, first = null;
+                ch = read_while(function(ch){
+                    if (ch >= "0" && ch <= "7") {
+                        if (!first) {
+                            first = ch;
+                            return ++octal_len;
+                        }
+                        else if (first <= "3" && octal_len <= 2) return ++octal_len;
+                        else if (first >= "4" && octal_len <= 1) return ++octal_len;
+                    }
+                    return false;
+                });
+                if (octal_len > 0) ch = String.fromCharCode(parseInt(ch, 8));
+                else ch = read_escaped_char(true);
             }
-            if (node instanceof AST_Directive) {
-                node.scope = scope;
-                push_uniq(scope.directives, node.value);
-                return true;
+            else if (ch == quote) break;
+            ret += ch;
+        }
+        return token("string", ret);
+    });
+
+    function skip_line_comment(type) {
+        var regex_allowed = S.regex_allowed;
+        var i = find("\n"), ret;
+        if (i == -1) {
+            ret = S.text.substr(S.pos);
+            S.pos = S.text.length;
+        } else {
+            ret = S.text.substring(S.pos, i);
+            S.pos = i;
+        }
+        S.comments_before.push(token(type, ret, true));
+        S.regex_allowed = regex_allowed;
+        return next_token();
+    };
+
+    var skip_multiline_comment = with_eof_error("Unterminated multiline comment", function(){
+        var regex_allowed = S.regex_allowed;
+        var i = find("*/", true);
+        var text = S.text.substring(S.pos, i);
+        var a = text.split("\n"), n = a.length;
+        // update stream position
+        S.pos = i + 2;
+        S.line += n - 1;
+        if (n > 1) S.col = a[n - 1].length;
+        else S.col += a[n - 1].length;
+        S.col += 2;
+        var nlb = S.newline_before = S.newline_before || text.indexOf("\n") >= 0;
+        S.comments_before.push(token("comment2", text, true));
+        S.regex_allowed = regex_allowed;
+        S.newline_before = nlb;
+        return next_token();
+    });
+
+    function read_name() {
+        var backslash = false, name = "", ch, escaped = false, hex;
+        while ((ch = peek()) != null) {
+            if (!backslash) {
+                if (ch == "\\") escaped = backslash = true, next();
+                else if (is_identifier_char(ch)) name += next();
+                else break;
             }
-            if (node instanceof AST_With) {
-                for (var s = scope; s; s = s.parent_scope) s.uses_with = true;
-                return;
+            else {
+                if (ch != "u") parse_error("Expecting UnicodeEscapeSequence -- uXXXX");
+                ch = read_escaped_char();
+                if (!is_identifier_char(ch)) parse_error("Unicode char: " + ch.charCodeAt(0) + " is not valid in identifier");
+                name += ch;
+                backslash = false;
             }
-            if (node instanceof AST_LabeledStatement) {
-                var l = node.label;
-                if (labels.has(l.name)) throw new Error(string_template("Label {name} defined twice", l));
-                labels.set(l.name, l);
-                descend();
-                labels.del(l.name);
-                return true;
+        }
+        if (KEYWORDS(name) && escaped) {
+            hex = name.charCodeAt(0).toString(16).toUpperCase();
+            name = "\\u" + "0000".substr(hex.length) + hex + name.slice(1);
+        }
+        return name;
+    };
+
+    var read_regexp = with_eof_error("Unterminated regular expression", function(regexp){
+        var prev_backslash = false, ch, in_class = false;
+        while ((ch = next(true))) if (prev_backslash) {
+            regexp += "\\" + ch;
+            prev_backslash = false;
+        } else if (ch == "[") {
+            in_class = true;
+            regexp += ch;
+        } else if (ch == "]" && in_class) {
+            in_class = false;
+            regexp += ch;
+        } else if (ch == "/" && !in_class) {
+            break;
+        } else if (ch == "\\") {
+            prev_backslash = true;
+        } else {
+            regexp += ch;
+        }
+        var mods = read_name();
+        return token("regexp", new RegExp(regexp, mods));
+    });
+
+    function read_operator(prefix) {
+        function grow(op) {
+            if (!peek()) return op;
+            var bigger = op + peek();
+            if (OPERATORS(bigger)) {
+                next();
+                return grow(bigger);
+            } else {
+                return op;
             }
-            if (node instanceof AST_SymbolDeclaration) {
-                node.init_scope_vars();
+        };
+        return token("operator", grow(prefix || next()));
+    };
+
+    function handle_slash() {
+        next();
+        switch (peek()) {
+          case "/":
+            next();
+            return skip_line_comment("comment1");
+          case "*":
+            next();
+            return skip_multiline_comment();
+        }
+        return S.regex_allowed ? read_regexp("") : read_operator("/");
+    };
+
+    function handle_dot() {
+        next();
+        return is_digit(peek().charCodeAt(0))
+            ? read_num(".")
+            : token("punc", ".");
+    };
+
+    function read_word() {
+        var word = read_name();
+        if (prev_was_dot) return token("name", word);
+        return KEYWORDS_ATOM(word) ? token("atom", word)
+            : !KEYWORDS(word) ? token("name", word)
+            : OPERATORS(word) ? token("operator", word)
+            : token("keyword", word);
+    };
+
+    function with_eof_error(eof_error, cont) {
+        return function(x) {
+            try {
+                return cont(x);
+            } catch(ex) {
+                if (ex === EX_EOF) parse_error(eof_error);
+                else throw ex;
             }
-            if (node instanceof AST_Symbol) {
-                node.scope = scope;
+        };
+    };
+
+    function next_token(force_regexp) {
+        if (force_regexp != null)
+            return read_regexp(force_regexp);
+        skip_whitespace();
+        start_token();
+        if (html5_comments) {
+            if (looking_at("<!--")) {
+                forward(4);
+                return skip_line_comment("comment3");
             }
-            if (node instanceof AST_Label) {
-                node.thedef = node;
-                node.init_scope_vars();
+            if (looking_at("-->") && S.newline_before) {
+                forward(3);
+                return skip_line_comment("comment4");
             }
-            if (node instanceof AST_SymbolLambda) {
-                (node.scope = scope.parent_scope).def_function(node);
-                node.init.push(tw.parent());
-            } else if (node instanceof AST_SymbolDefun) {
-                (node.scope = scope.parent_scope).def_function(node);
-                node.init.push(tw.parent());
-            } else if (node instanceof AST_SymbolVar || node instanceof AST_SymbolConst) {
-                var def = scope.def_variable(node);
-                def.constant = node instanceof AST_SymbolConst;
-                def = tw.parent();
-                if (def.value) node.init.push(def);
-            } else if (node instanceof AST_SymbolCatch) {
-                scope.def_variable(node);
+        }
+        var ch = peek();
+        if (!ch) return token("eof");
+        var code = ch.charCodeAt(0);
+        switch (code) {
+          case 34: case 39: return read_string();
+          case 46: return handle_dot();
+          case 47: return handle_slash();
+        }
+        if (is_digit(code)) return read_num();
+        if (PUNC_CHARS(ch)) return token("punc", next());
+        if (OPERATOR_CHARS(ch)) return read_operator();
+        if (code == 92 || is_identifier_start(code)) return read_word();
+        parse_error("Unexpected character '" + ch + "'");
+    };
+
+    next_token.context = function(nc) {
+        if (nc) S = nc;
+        return S;
+    };
+
+    return next_token;
+
+};
+
+/* -----[ Parser (constants) ]----- */
+
+var UNARY_PREFIX = makePredicate([
+    "typeof",
+    "void",
+    "delete",
+    "--",
+    "++",
+    "!",
+    "~",
+    "-",
+    "+"
+]);
+
+var UNARY_POSTFIX = makePredicate([ "--", "++" ]);
+
+var ASSIGNMENT = makePredicate([ "=", "+=", "-=", "/=", "*=", "%=", ">>=", "<<=", ">>>=", "|=", "^=", "&=" ]);
+
+var PRECEDENCE = (function(a, ret){
+    for (var i = 0; i < a.length; ++i) {
+        var b = a[i];
+        for (var j = 0; j < b.length; ++j) {
+            ret[b[j]] = i + 1;
+        }
+    }
+    return ret;
+})(
+    [
+        ["||"],
+        ["&&"],
+        ["|"],
+        ["^"],
+        ["&"],
+        ["==", "===", "!=", "!=="],
+        ["<", ">", "<=", ">=", "in", "instanceof"],
+        [">>", "<<", ">>>"],
+        ["+", "-"],
+        ["*", "/", "%"]
+    ],
+    {}
+);
+
+var STATEMENTS_WITH_LABELS = array_to_hash([ "for", "do", "while", "switch" ]);
+
+var ATOMIC_START_TOKEN = array_to_hash([ "atom", "num", "string", "regexp", "name" ]);
+
+/* -----[ Parser ]----- */
+
+function parse($TEXT, options) {
+
+    options = defaults(options, {
+        strict         : false,
+        filename       : null,
+        toplevel       : null,
+        expression     : false,
+        html5_comments : true,
+    });
+
+    var S = {
+        input         : (typeof $TEXT == "string"
+                         ? tokenizer($TEXT, options.filename,
+                                     options.html5_comments)
+                         : $TEXT),
+        token         : null,
+        prev          : null,
+        peeked        : null,
+        in_function   : 0,
+        in_directives : true,
+        in_loop       : 0,
+        labels        : []
+    };
+
+    S.token = next();
+
+    function is(type, value) {
+        return is_token(S.token, type, value);
+    };
+
+    function peek() { return S.peeked || (S.peeked = S.input()); };
+
+    function next() {
+        S.prev = S.token;
+        if (S.peeked) {
+            S.token = S.peeked;
+            S.peeked = null;
+        } else {
+            S.token = S.input();
+        }
+        S.in_directives = S.in_directives && (
+            S.token.type == "string" || is("punc", ";")
+        );
+        return S.token;
+    };
+
+    function prev() {
+        return S.prev;
+    };
+
+    function croak(msg, line, col, pos) {
+        var ctx = S.input.context();
+        js_error(msg,
+                 ctx.filename,
+                 line != null ? line : ctx.tokline,
+                 col != null ? col : ctx.tokcol,
+                 pos != null ? pos : ctx.tokpos);
+    };
+
+    function token_error(token, msg) {
+        croak(msg, token.line, token.col);
+    };
+
+    function unexpected(token) {
+        if (token == null)
+            token = S.token;
+        token_error(token, "Unexpected token: " + token.type + " (" + token.value + ")");
+    };
+
+    function expect_token(type, val) {
+        if (is(type, val)) {
+            return next();
+        }
+        token_error(S.token, "Unexpected token " + S.token.type + " Â«" + S.token.value + "Â»" + ", expected " + type + " Â«" + val + "Â»");
+    };
+
+    function expect(punc) { return expect_token("punc", punc); };
+
+    function can_insert_semicolon() {
+        return !options.strict && (
+            S.token.nlb || is("eof") || is("punc", "}")
+        );
+    };
+
+    function semicolon() {
+        if (is("punc", ";")) next();
+        else if (!can_insert_semicolon()) unexpected();
+    };
+
+    function parenthesised() {
+        expect("(");
+        var exp = expression(true);
+        expect(")");
+        return exp;
+    };
+
+    function embed_tokens(parser) {
+        return function() {
+            var start = S.token;
+            var expr = parser();
+            var end = prev();
+            expr.start = start;
+            expr.end = end;
+            return expr;
+        };
+    };
+
+    function handle_regexp() {
+        if (is("operator", "/") || is("operator", "/=")) {
+            S.peeked = null;
+            S.token = S.input(S.token.value.substr(1)); // force regexp
+        }
+    };
+
+    var statement = embed_tokens(function() {
+        var tmp;
+        handle_regexp();
+        switch (S.token.type) {
+          case "string":
+            var dir = S.in_directives, stat = simple_statement();
+            // XXXv2: decide how to fix directives
+            if (dir && stat.body instanceof AST_String && !is("punc", ","))
+                return new AST_Directive({ value: stat.body.value });
+            return stat;
+          case "num":
+          case "regexp":
+          case "operator":
+          case "atom":
+            return simple_statement();
+
+          case "name":
+            return is_token(peek(), "punc", ":")
+                ? labeled_statement()
+                : simple_statement();
+
+          case "punc":
+            switch (S.token.value) {
+              case "{":
+                return new AST_BlockStatement({
+                    start : S.token,
+                    body  : block_(),
+                    end   : prev()
+                });
+              case "[":
+              case "(":
+                return simple_statement();
+              case ";":
+                next();
+                return new AST_EmptyStatement();
+              default:
+                unexpected();
             }
-            if (node instanceof AST_LabelRef) {
-                var sym = labels.get(node.name);
-                if (!sym) throw new Error(string_template("Undefined label {name} [{line},{col}]", {
-                    name: node.name,
-                    line: node.start.line,
-                    col: node.start.col
-                }));
+
+          case "keyword":
+            switch (tmp = S.token.value, next(), tmp) {
+              case "break":
+                return break_cont(AST_Break);
+
+              case "continue":
+                return break_cont(AST_Continue);
+
+              case "debugger":
+                semicolon();
+                return new AST_Debugger();
+
+              case "do":
+                return new AST_Do({
+                    body      : in_loop(statement),
+                    condition : (expect_token("keyword", "while"), tmp = parenthesised(), semicolon(), tmp)
+                });
+
+              case "while":
+                return new AST_While({
+                    condition : parenthesised(),
+                    body      : in_loop(statement)
+                });
+
+              case "for":
+                return for_();
+
+              case "function":
+                return function_(AST_Defun);
+
+              case "if":
+                return if_();
+
+              case "return":
+                if (S.in_function == 0)
+                    croak("'return' outside of function");
+                return new AST_Return({
+                    value: ( is("punc", ";")
+                             ? (next(), null)
+                             : can_insert_semicolon()
+                             ? null
+                             : (tmp = expression(true), semicolon(), tmp) )
+                });
+
+              case "switch":
+                return new AST_Switch({
+                    expression : parenthesised(),
+                    body       : in_loop(switch_body_)
+                });
+
+              case "throw":
+                if (S.token.nlb)
+                    croak("Illegal newline after 'throw'");
+                return new AST_Throw({
+                    value: (tmp = expression(true), semicolon(), tmp)
+                });
+
+              case "try":
+                return try_();
+
+              case "var":
+                return tmp = var_(), semicolon(), tmp;
+
+              case "const":
+                return tmp = const_(), semicolon(), tmp;
+
+              case "with":
+                return new AST_With({
+                    expression : parenthesised(),
+                    body       : statement()
+                });
+
+              default:
+                unexpected();
+            }
+        }
+    });
+
+    function labeled_statement() {
+        var label = as_symbol(AST_Label);
+        if (find_if(function(l){ return l.name == label.name }, S.labels)) {
+            // ECMA-262, 12.12: An ECMAScript program is considered
+            // syntactically incorrect if it contains a
+            // LabelledStatement that is enclosed by a
+            // LabelledStatement with the same Identifier as label.
+            croak("Label " + label.name + " defined twice");
+        }
+        expect(":");
+        S.labels.push(label);
+        var stat = statement();
+        S.labels.pop();
+        if (!(stat instanceof AST_IterationStatement)) {
+            // check for `continue` that refers to this label.
+            // those should be reported as syntax errors.
+            // https://github.com/mishoo/UglifyJS2/issues/287
+            label.references.forEach(function(ref){
+                if (ref instanceof AST_Continue) {
+                    ref = ref.label.start;
+                    croak("Continue label `" + label.name + "` refers to non-IterationStatement.",
+                          ref.line, ref.col, ref.pos);
+                }
+            });
+        }
+        return new AST_LabeledStatement({ body: stat, label: label });
+    };
+
+    function simple_statement(tmp) {
+        return new AST_SimpleStatement({ body: (tmp = expression(true), semicolon(), tmp) });
+    };
+
+    function break_cont(type) {
+        var label = null, ldef;
+        if (!can_insert_semicolon()) {
+            label = as_symbol(AST_LabelRef, true);
+        }
+        if (label != null) {
+            ldef = find_if(function(l){ return l.name == label.name }, S.labels);
+            if (!ldef)
+                croak("Undefined label " + label.name);
+            label.thedef = ldef;
+        }
+        else if (S.in_loop == 0)
+            croak(type.TYPE + " not inside a loop or switch");
+        semicolon();
+        var stat = new type({ label: label });
+        if (ldef) ldef.references.push(stat);
+        return stat;
+    };
+
+    function for_() {
+        expect("(");
+        var init = null;
+        if (!is("punc", ";")) {
+            init = is("keyword", "var")
+                ? (next(), var_(true))
+                : expression(true, true);
+            if (is("operator", "in")) {
+                if (init instanceof AST_Var && init.definitions.length > 1)
+                    croak("Only one variable declaration allowed in for..in loop");
+                next();
+                return for_in(init);
+            }
+        }
+        return regular_for(init);
+    };
+
+    function regular_for(init) {
+        expect(";");
+        var test = is("punc", ";") ? null : expression(true);
+        expect(";");
+        var step = is("punc", ")") ? null : expression(true);
+        expect(")");
+        return new AST_For({
+            init      : init,
+            condition : test,
+            step      : step,
+            body      : in_loop(statement)
+        });
+    };
+
+    function for_in(init) {
+        var lhs = init instanceof AST_Var ? init.definitions[0].name : null;
+        var obj = expression(true);
+        expect(")");
+        return new AST_ForIn({
+            init   : init,
+            name   : lhs,
+            object : obj,
+            body   : in_loop(statement)
+        });
+    };
+
+    var function_ = function(ctor) {
+        var in_statement = ctor === AST_Defun;
+        var name = is("name") ? as_symbol(in_statement ? AST_SymbolDefun : AST_SymbolLambda) : null;
+        if (in_statement && !name)
+            unexpected();
+        expect("(");
+        return new ctor({
+            name: name,
+            argnames: (function(first, a){
+                while (!is("punc", ")")) {
+                    if (first) first = false; else expect(",");
+                    a.push(as_symbol(AST_SymbolFunarg));
+                }
+                next();
+                return a;
+            })(true, []),
+            body: (function(loop, labels){
+                ++S.in_function;
+                S.in_directives = true;
+                S.in_loop = 0;
+                S.labels = [];
+                var a = block_();
+                --S.in_function;
+                S.in_loop = loop;
+                S.labels = labels;
+                return a;
+            })(S.in_loop, S.labels)
+        });
+    };
+
+    function if_() {
+        var cond = parenthesised(), body = statement(), belse = null;
+        if (is("keyword", "else")) {
+            next();
+            belse = statement();
+        }
+        return new AST_If({
+            condition   : cond,
+            body        : body,
+            alternative : belse
+        });
+    };
+
+    function block_() {
+        expect("{");
+        var a = [];
+        while (!is("punc", "}")) {
+            if (is("eof")) unexpected();
+            a.push(statement());
+        }
+        next();
+        return a;
+    };
+
+    function switch_body_() {
+        expect("{");
+        var a = [], cur = null, branch = null, tmp;
+        while (!is("punc", "}")) {
+            if (is("eof")) unexpected();
+            if (is("keyword", "case")) {
+                if (branch) branch.end = prev();
+                cur = [];
+                branch = new AST_Case({
+                    start      : (tmp = S.token, next(), tmp),
+                    expression : expression(true),
+                    body       : cur
+                });
+                a.push(branch);
+                expect(":");
+            }
+            else if (is("keyword", "default")) {
+                if (branch) branch.end = prev();
+                cur = [];
+                branch = new AST_Default({
+                    start : (tmp = S.token, next(), expect(":"), tmp),
+                    body  : cur
+                });
+                a.push(branch);
+            }
+            else {
+                if (!cur) unexpected();
+                cur.push(statement());
+            }
+        }
+        if (branch) branch.end = prev();
+        next();
+        return a;
+    };
+
+    function try_() {
+        var body = block_(), bcatch = null, bfinally = null;
+        if (is("keyword", "catch")) {
+            var start = S.token;
+            next();
+            expect("(");
+            var name = as_symbol(AST_SymbolCatch);
+            expect(")");
+            bcatch = new AST_Catch({
+                start   : start,
+                argname : name,
+                body    : block_(),
+                end     : prev()
+            });
+        }
+        if (is("keyword", "finally")) {
+            var start = S.token;
+            next();
+            bfinally = new AST_Finally({
+                start : start,
+                body  : block_(),
+                end   : prev()
+            });
+        }
+        if (!bcatch && !bfinally)
+            croak("Missing catch/finally blocks");
+        return new AST_Try({
+            body     : body,
+            bcatch   : bcatch,
+            bfinally : bfinally
+        });
+    };
+
+    function vardefs(no_in, in_const) {
+        var a = [];
+        for (;;) {
+            a.push(new AST_VarDef({
+                start : S.token,
+                name  : as_symbol(in_const ? AST_SymbolConst : AST_SymbolVar),
+                value : is("operator", "=") ? (next(), expression(false, no_in)) : null,
+                end   : prev()
+            }));
+            if (!is("punc", ","))
+                break;
+            next();
+        }
+        return a;
+    };
+
+    var var_ = function(no_in) {
+        return new AST_Var({
+            start       : prev(),
+            definitions : vardefs(no_in, false),
+            end         : prev()
+        });
+    };
+
+    var const_ = function() {
+        return new AST_Const({
+            start       : prev(),
+            definitions : vardefs(false, true),
+            end         : prev()
+        });
+    };
+
+    var new_ = function() {
+        var start = S.token;
+        expect_token("operator", "new");
+        var newexp = expr_atom(false), args;
+        if (is("punc", "(")) {
+            next();
+            args = expr_list(")");
+        } else {
+            args = [];
+        }
+        return subscripts(new AST_New({
+            start      : start,
+            expression : newexp,
+            args       : args,
+            end        : prev()
+        }), true);
+    };
+
+    function as_atom_node() {
+        var tok = S.token, ret;
+        switch (tok.type) {
+          case "name":
+          case "keyword":
+            ret = _make_symbol(AST_SymbolRef);
+            break;
+          case "num":
+            ret = new AST_Number({ start: tok, end: tok, value: tok.value });
+            break;
+          case "string":
+            ret = new AST_String({ start: tok, end: tok, value: tok.value });
+            break;
+          case "regexp":
+            ret = new AST_RegExp({ start: tok, end: tok, value: tok.value });
+            break;
+          case "atom":
+            switch (tok.value) {
+              case "false":
+                ret = new AST_False({ start: tok, end: tok });
+                break;
+              case "true":
+                ret = new AST_True({ start: tok, end: tok });
+                break;
+              case "null":
+                ret = new AST_Null({ start: tok, end: tok });
+                break;
+            }
+            break;
+        }
+        next();
+        return ret;
+    };
+
+    var expr_atom = function(allow_calls) {
+        if (is("operator", "new")) {
+            return new_();
+        }
+        var start = S.token;
+        if (is("punc")) {
+            switch (start.value) {
+              case "(":
+                next();
+                var ex = expression(true);
+                ex.start = start;
+                ex.end = S.token;
+                expect(")");
+                return subscripts(ex, allow_calls);
+              case "[":
+                return subscripts(array_(), allow_calls);
+              case "{":
+                return subscripts(object_(), allow_calls);
+            }
+            unexpected();
+        }
+        if (is("keyword", "function")) {
+            next();
+            var func = function_(AST_Function);
+            func.start = start;
+            func.end = prev();
+            return subscripts(func, allow_calls);
+        }
+        if (ATOMIC_START_TOKEN[S.token.type]) {
+            return subscripts(as_atom_node(), allow_calls);
+        }
+        unexpected();
+    };
+
+    function expr_list(closing, allow_trailing_comma, allow_empty) {
+        var first = true, a = [];
+        while (!is("punc", closing)) {
+            if (first) first = false; else expect(",");
+            if (allow_trailing_comma && is("punc", closing)) break;
+            if (is("punc", ",") && allow_empty) {
+                a.push(new AST_Hole({ start: S.token, end: S.token }));
+            } else {
+                a.push(expression(false));
+            }
+        }
+        next();
+        return a;
+    };
+
+    var array_ = embed_tokens(function() {
+        expect("[");
+        return new AST_Array({
+            elements: expr_list("]", !options.strict, true)
+        });
+    });
+
+    var object_ = embed_tokens(function() {
+        expect("{");
+        var first = true, a = [];
+        while (!is("punc", "}")) {
+            if (first) first = false; else expect(",");
+            if (!options.strict && is("punc", "}"))
+                // allow trailing comma
+                break;
+            var start = S.token;
+            var type = start.type;
+            var name = as_property_name();
+            if (type == "name" && !is("punc", ":")) {
+                if (name == "get") {
+                    a.push(new AST_ObjectGetter({
+                        start : start,
+                        key   : as_atom_node(),
+                        value : function_(AST_Accessor),
+                        end   : prev()
+                    }));
+                    continue;
+                }
+                if (name == "set") {
+                    a.push(new AST_ObjectSetter({
+                        start : start,
+                        key   : as_atom_node(),
+                        value : function_(AST_Accessor),
+                        end   : prev()
+                    }));
+                    continue;
+                }
+            }
+            expect(":");
+            a.push(new AST_ObjectKeyVal({
+                start : start,
+                key   : name,
+                value : expression(false),
+                end   : prev()
+            }));
+        }
+        next();
+        return new AST_Object({ properties: a });
+    });
+
+    function as_property_name() {
+        var tmp = S.token;
+        next();
+        switch (tmp.type) {
+          case "num":
+          case "string":
+          case "name":
+          case "operator":
+          case "keyword":
+          case "atom":
+            return tmp.value;
+          default:
+            unexpected();
+        }
+    };
+
+    function as_name() {
+        var tmp = S.token;
+        next();
+        switch (tmp.type) {
+          case "name":
+          case "operator":
+          case "keyword":
+          case "atom":
+            return tmp.value;
+          default:
+            unexpected();
+        }
+    };
+
+    function _make_symbol(type) {
+        var name = S.token.value;
+        return new (name == "this" ? AST_This : type)({
+            name  : String(name),
+            start : S.token,
+            end   : S.token
+        });
+    };
+
+    function as_symbol(type, noerror) {
+        if (!is("name")) {
+            if (!noerror) croak("Name expected");
+            return null;
+        }
+        var sym = _make_symbol(type);
+        next();
+        return sym;
+    };
+
+    var subscripts = function(expr, allow_calls) {
+        var start = expr.start;
+        if (is("punc", ".")) {
+            next();
+            return subscripts(new AST_Dot({
+                start      : start,
+                expression : expr,
+                property   : as_name(),
+                end        : prev()
+            }), allow_calls);
+        }
+        if (is("punc", "[")) {
+            next();
+            var prop = expression(true);
+            expect("]");
+            return subscripts(new AST_Sub({
+                start      : start,
+                expression : expr,
+                property   : prop,
+                end        : prev()
+            }), allow_calls);
+        }
+        if (allow_calls && is("punc", "(")) {
+            next();
+            return subscripts(new AST_Call({
+                start      : start,
+                expression : expr,
+                args       : expr_list(")"),
+                end        : prev()
+            }), true);
+        }
+        return expr;
+    };
+
+    var maybe_unary = function(allow_calls) {
+        var start = S.token;
+        if (is("operator") && UNARY_PREFIX(start.value)) {
+            next();
+            handle_regexp();
+            var ex = make_unary(AST_UnaryPrefix, start.value, maybe_unary(allow_calls));
+            ex.start = start;
+            ex.end = prev();
+            return ex;
+        }
+        var val = expr_atom(allow_calls);
+        while (is("operator") && UNARY_POSTFIX(S.token.value) && !S.token.nlb) {
+            val = make_unary(AST_UnaryPostfix, S.token.value, val);
+            val.start = start;
+            val.end = S.token;
+            next();
+        }
+        return val;
+    };
+
+    function make_unary(ctor, op, expr) {
+        if ((op == "++" || op == "--") && !is_assignable(expr))
+            croak("Invalid use of " + op + " operator");
+        return new ctor({ operator: op, expression: expr });
+    };
+
+    var expr_op = function(left, min_prec, no_in) {
+        var op = is("operator") ? S.token.value : null;
+        if (op == "in" && no_in) op = null;
+        var prec = op != null ? PRECEDENCE[op] : null;
+        if (prec != null && prec > min_prec) {
+            next();
+            var right = expr_op(maybe_unary(true), prec, no_in);
+            return expr_op(new AST_Binary({
+                start    : left.start,
+                left     : left,
+                operator : op,
+                right    : right,
+                end      : right.end
+            }), min_prec, no_in);
+        }
+        return left;
+    };
+
+    function expr_ops(no_in) {
+        return expr_op(maybe_unary(true), 0, no_in);
+    };
+
+    var maybe_conditional = function(no_in) {
+        var start = S.token;
+        var expr = expr_ops(no_in);
+        if (is("operator", "?")) {
+            next();
+            var yes = expression(false);
+            expect(":");
+            return new AST_Conditional({
+                start       : start,
+                condition   : expr,
+                consequent  : yes,
+                alternative : expression(false, no_in),
+                end         : prev()
+            });
+        }
+        return expr;
+    };
+
+    function is_assignable(expr) {
+        if (!options.strict) return true;
+        if (expr instanceof AST_This) return false;
+        return (expr instanceof AST_PropAccess || expr instanceof AST_Symbol);
+    };
+
+    var maybe_assign = function(no_in) {
+        var start = S.token;
+        var left = maybe_conditional(no_in), val = S.token.value;
+        if (is("operator") && ASSIGNMENT(val)) {
+            if (is_assignable(left)) {
+                next();
+                return new AST_Assign({
+                    start    : start,
+                    left     : left,
+                    operator : val,
+                    right    : maybe_assign(no_in),
+                    end      : prev()
+                });
+            }
+            croak("Invalid assignment");
+        }
+        return left;
+    };
+
+    var expression = function(commas, no_in) {
+        var start = S.token;
+        var expr = maybe_assign(no_in);
+        if (commas && is("punc", ",")) {
+            next();
+            return new AST_Seq({
+                start  : start,
+                car    : expr,
+                cdr    : expression(true, no_in),
+                end    : peek()
+            });
+        }
+        return expr;
+    };
+
+    function in_loop(cont) {
+        ++S.in_loop;
+        var ret = cont();
+        --S.in_loop;
+        return ret;
+    };
+
+    if (options.expression) {
+        return expression(true);
+    }
+
+    return (function(){
+        var start = S.token;
+        var body = [];
+        while (!is("eof"))
+            body.push(statement());
+        var end = prev();
+        var toplevel = options.toplevel;
+        if (toplevel) {
+            toplevel.body = toplevel.body.concat(body);
+            toplevel.end = end;
+        } else {
+            toplevel = new AST_Toplevel({ start: start, body: body, end: end });
+        }
+        return toplevel;
+    })();
+
+};
+
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+// Tree transformer helpers.
+
+function TreeTransformer(before, after) {
+    TreeWalker.call(this);
+    this.before = before;
+    this.after = after;
+}
+TreeTransformer.prototype = new TreeWalker;
+
+(function(undefined){
+
+    function _(node, descend) {
+        node.DEFMETHOD("transform", function(tw, in_list){
+            var x, y;
+            tw.push(this);
+            if (tw.before) x = tw.before(this, descend, in_list);
+            if (x === undefined) {
+                if (!tw.after) {
+                    x = this;
+                    descend(x, tw);
+                } else {
+                    tw.stack[tw.stack.length - 1] = x = this.clone();
+                    descend(x, tw);
+                    y = tw.after(x, in_list);
+                    if (y !== undefined) x = y;
+                }
+            }
+            tw.pop();
+            return x;
+        });
+    };
+
+    function do_list(list, tw) {
+        return MAP(list, function(node){
+            return node.transform(tw, true);
+        });
+    };
+
+    _(AST_Node, noop);
+
+    _(AST_LabeledStatement, function(self, tw){
+        self.label = self.label.transform(tw);
+        self.body = self.body.transform(tw);
+    });
+
+    _(AST_SimpleStatement, function(self, tw){
+        self.body = self.body.transform(tw);
+    });
+
+    _(AST_Block, function(self, tw){
+        self.body = do_list(self.body, tw);
+    });
+
+    _(AST_DWLoop, function(self, tw){
+        self.condition = self.condition.transform(tw);
+        self.body = self.body.transform(tw);
+    });
+
+    _(AST_For, function(self, tw){
+        if (self.init) self.init = self.init.transform(tw);
+        if (self.condition) self.condition = self.condition.transform(tw);
+        if (self.step) self.step = self.step.transform(tw);
+        self.body = self.body.transform(tw);
+    });
+
+    _(AST_ForIn, function(self, tw){
+        self.init = self.init.transform(tw);
+        self.object = self.object.transform(tw);
+        self.body = self.body.transform(tw);
+    });
+
+    _(AST_With, function(self, tw){
+        self.expression = self.expression.transform(tw);
+        self.body = self.body.transform(tw);
+    });
+
+    _(AST_Exit, function(self, tw){
+        if (self.value) self.value = self.value.transform(tw);
+    });
+
+    _(AST_LoopControl, function(self, tw){
+        if (self.label) self.label = self.label.transform(tw);
+    });
+
+    _(AST_If, function(self, tw){
+        self.condition = self.condition.transform(tw);
+        self.body = self.body.transform(tw);
+        if (self.alternative) self.alternative = self.alternative.transform(tw);
+    });
+
+    _(AST_Switch, function(self, tw){
+        self.expression = self.expression.transform(tw);
+        self.body = do_list(self.body, tw);
+    });
+
+    _(AST_Case, function(self, tw){
+        self.expression = self.expression.transform(tw);
+        self.body = do_list(self.body, tw);
+    });
+
+    _(AST_Try, function(self, tw){
+        self.body = do_list(self.body, tw);
+        if (self.bcatch) self.bcatch = self.bcatch.transform(tw);
+        if (self.bfinally) self.bfinally = self.bfinally.transform(tw);
+    });
+
+    _(AST_Catch, function(self, tw){
+        self.argname = self.argname.transform(tw);
+        self.body = do_list(self.body, tw);
+    });
+
+    _(AST_Definitions, function(self, tw){
+        self.definitions = do_list(self.definitions, tw);
+    });
+
+    _(AST_VarDef, function(self, tw){
+        self.name = self.name.transform(tw);
+        if (self.value) self.value = self.value.transform(tw);
+    });
+
+    _(AST_Lambda, function(self, tw){
+        if (self.name) self.name = self.name.transform(tw);
+        self.argnames = do_list(self.argnames, tw);
+        self.body = do_list(self.body, tw);
+    });
+
+    _(AST_Call, function(self, tw){
+        self.expression = self.expression.transform(tw);
+        self.args = do_list(self.args, tw);
+    });
+
+    _(AST_Seq, function(self, tw){
+        self.car = self.car.transform(tw);
+        self.cdr = self.cdr.transform(tw);
+    });
+
+    _(AST_Dot, function(self, tw){
+        self.expression = self.expression.transform(tw);
+    });
+
+    _(AST_Sub, function(self, tw){
+        self.expression = self.expression.transform(tw);
+        self.property = self.property.transform(tw);
+    });
+
+    _(AST_Unary, function(self, tw){
+        self.expression = self.expression.transform(tw);
+    });
+
+    _(AST_Binary, function(self, tw){
+        self.left = self.left.transform(tw);
+        self.right = self.right.transform(tw);
+    });
+
+    _(AST_Conditional, function(self, tw){
+        self.condition = self.condition.transform(tw);
+        self.consequent = self.consequent.transform(tw);
+        self.alternative = self.alternative.transform(tw);
+    });
+
+    _(AST_Array, function(self, tw){
+        self.elements = do_list(self.elements, tw);
+    });
+
+    _(AST_Object, function(self, tw){
+        self.properties = do_list(self.properties, tw);
+    });
+
+    _(AST_ObjectProperty, function(self, tw){
+        self.value = self.value.transform(tw);
+    });
+
+})();
+
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+function SymbolDef(scope, index, orig) {
+    this.name = orig.name;
+    this.orig = [ orig ];
+    this.scope = scope;
+    this.references = [];
+    this.global = false;
+    this.mangled_name = null;
+    this.undeclared = false;
+    this.constant = false;
+    this.index = index;
+};
+
+SymbolDef.prototype = {
+    unmangleable: function(options) {
+        return (this.global && !(options && options.toplevel))
+            || this.undeclared
+            || (!(options && options.eval) && (this.scope.uses_eval || this.scope.uses_with));
+    },
+    mangle: function(options) {
+        if (!this.mangled_name && !this.unmangleable(options)) {
+            var s = this.scope;
+            if (!options.screw_ie8 && this.orig[0] instanceof AST_SymbolLambda)
+                s = s.parent_scope;
+            this.mangled_name = s.next_mangled(options, this);
+        }
+    }
+};
+
+AST_Toplevel.DEFMETHOD("figure_out_scope", function(options){
+    options = defaults(options, {
+        screw_ie8: false
+    });
+
+    // pass 1: setup scope chaining and handle definitions
+    var self = this;
+    var scope = self.parent_scope = null;
+    var defun = null;
+    var nesting = 0;
+    var tw = new TreeWalker(function(node, descend){
+        if (options.screw_ie8 && node instanceof AST_Catch) {
+            var save_scope = scope;
+            scope = new AST_Scope(node);
+            scope.init_scope_vars(nesting);
+            scope.parent_scope = save_scope;
+            descend();
+            scope = save_scope;
+            return true;
+        }
+        if (node instanceof AST_Scope) {
+            node.init_scope_vars(nesting);
+            var save_scope = node.parent_scope = scope;
+            var save_defun = defun;
+            defun = scope = node;
+            ++nesting; descend(); --nesting;
+            scope = save_scope;
+            defun = save_defun;
+            return true;        // don't descend again in TreeWalker
+        }
+        if (node instanceof AST_Directive) {
+            node.scope = scope;
+            push_uniq(scope.directives, node.value);
+            return true;
+        }
+        if (node instanceof AST_With) {
+            for (var s = scope; s; s = s.parent_scope)
+                s.uses_with = true;
+            return;
+        }
+        if (node instanceof AST_Symbol) {
+            node.scope = scope;
+        }
+        if (node instanceof AST_SymbolLambda) {
+            defun.def_function(node);
+        }
+        else if (node instanceof AST_SymbolDefun) {
+            // Careful here, the scope where this should be defined is
+            // the parent scope.  The reason is that we enter a new
+            // scope when we encounter the AST_Defun node (which is
+            // instanceof AST_Scope) but we get to the symbol a bit
+            // later.
+            (node.scope = defun.parent_scope).def_function(node);
+        }
+        else if (node instanceof AST_SymbolVar
+                 || node instanceof AST_SymbolConst) {
+            var def = defun.def_variable(node);
+            def.constant = node instanceof AST_SymbolConst;
+            def.init = tw.parent().value;
+        }
+        else if (node instanceof AST_SymbolCatch) {
+            (options.screw_ie8 ? scope : defun)
+                .def_variable(node);
+        }
+    });
+    self.walk(tw);
+
+    // pass 2: find back references and eval
+    var func = null;
+    var globals = self.globals = new Dictionary();
+    var tw = new TreeWalker(function(node, descend){
+        if (node instanceof AST_Lambda) {
+            var prev_func = func;
+            func = node;
+            descend();
+            func = prev_func;
+            return true;
+        }
+        if (node instanceof AST_SymbolRef) {
+            var name = node.name;
+            var sym = node.scope.find_variable(name);
+            if (!sym) {
+                var g;
+                if (globals.has(name)) {
+                    g = globals.get(name);
+                } else {
+                    g = new SymbolDef(self, globals.size(), node);
+                    g.undeclared = true;
+                    g.global = true;
+                    globals.set(name, g);
+                }
+                node.thedef = g;
+                if (name == "eval" && tw.parent() instanceof AST_Call) {
+                    for (var s = node.scope; s && !s.uses_eval; s = s.parent_scope)
+                        s.uses_eval = true;
+                }
+                if (func && name == "arguments") {
+                    func.uses_arguments = true;
+                }
+            } else {
                 node.thedef = sym;
             }
-        });
-        self.walk(tw);
-        var func = null;
-        var globals = self.globals = new Dictionary();
-        var tw = new TreeWalker(function(node, descend) {
-            if (node instanceof AST_Lambda) {
-                var prev_func = func;
-                func = node;
-                descend();
-                func = prev_func;
-                return true;
-            }
-            if (node instanceof AST_LabelRef) {
-                node.reference();
-                return true;
-            }
-            if (node instanceof AST_SymbolRef) {
-                var name = node.name;
-                var sym = node.scope.find_variable(name);
-                if (!sym) {
-                    var g;
-                    if (globals.has(name)) {
-                        g = globals.get(name);
-                    } else {
-                        g = new SymbolDef(self, globals.size(), node);
-                        g.undeclared = true;
-                        globals.set(name, g);
-                    }
-                    node.thedef = g;
-                    if (name == "eval" && tw.parent() instanceof AST_Call) {
-                        for (var s = node.scope; s && !s.uses_eval; s = s.parent_scope) s.uses_eval = true;
-                    }
-                    if (name == "arguments") {
-                        func.uses_arguments = true;
-                    }
-                } else {
-                    node.thedef = sym;
+            node.reference();
+            return true;
+        }
+    });
+    self.walk(tw);
+});
+
+AST_Scope.DEFMETHOD("init_scope_vars", function(nesting){
+    this.directives = [];     // contains the directives defined in this scope, i.e. "use strict"
+    this.variables = new Dictionary(); // map name to AST_SymbolVar (variables defined in this scope; includes functions)
+    this.functions = new Dictionary(); // map name to AST_SymbolDefun (functions defined in this scope)
+    this.uses_with = false;   // will be set to true if this or some nested scope uses the `with` statement
+    this.uses_eval = false;   // will be set to true if this or nested scope uses the global `eval`
+    this.parent_scope = null; // the parent scope
+    this.enclosed = [];       // a list of variables from this or outer scope(s) that are referenced from this or inner scopes
+    this.cname = -1;          // the current index for mangling functions/variables
+    this.nesting = nesting;   // the nesting level of this scope (0 means toplevel)
+});
+
+AST_Scope.DEFMETHOD("strict", function(){
+    return this.has_directive("use strict");
+});
+
+AST_Lambda.DEFMETHOD("init_scope_vars", function(){
+    AST_Scope.prototype.init_scope_vars.apply(this, arguments);
+    this.uses_arguments = false;
+});
+
+AST_SymbolRef.DEFMETHOD("reference", function() {
+    var def = this.definition();
+    def.references.push(this);
+    var s = this.scope;
+    while (s) {
+        push_uniq(s.enclosed, def);
+        if (s === def.scope) break;
+        s = s.parent_scope;
+    }
+    this.frame = this.scope.nesting - def.scope.nesting;
+});
+
+AST_Scope.DEFMETHOD("find_variable", function(name){
+    if (name instanceof AST_Symbol) name = name.name;
+    return this.variables.get(name)
+        || (this.parent_scope && this.parent_scope.find_variable(name));
+});
+
+AST_Scope.DEFMETHOD("has_directive", function(value){
+    return this.parent_scope && this.parent_scope.has_directive(value)
+        || (this.directives.indexOf(value) >= 0 ? this : null);
+});
+
+AST_Scope.DEFMETHOD("def_function", function(symbol){
+    this.functions.set(symbol.name, this.def_variable(symbol));
+});
+
+AST_Scope.DEFMETHOD("def_variable", function(symbol){
+    var def;
+    if (!this.variables.has(symbol.name)) {
+        def = new SymbolDef(this, this.variables.size(), symbol);
+        this.variables.set(symbol.name, def);
+        def.global = !this.parent_scope;
+    } else {
+        def = this.variables.get(symbol.name);
+        def.orig.push(symbol);
+    }
+    return symbol.thedef = def;
+});
+
+AST_Scope.DEFMETHOD("next_mangled", function(options){
+    var ext = this.enclosed;
+    out: while (true) {
+        var m = base54(++this.cname);
+        if (!is_identifier(m)) continue; // skip over "do"
+
+        // https://github.com/mishoo/UglifyJS2/issues/242 -- do not
+        // shadow a name excepted from mangling.
+        if (options.except.indexOf(m) >= 0) continue;
+
+        // we must ensure that the mangled name does not shadow a name
+        // from some parent scope that is referenced in this or in
+        // inner scopes.
+        for (var i = ext.length; --i >= 0;) {
+            var sym = ext[i];
+            var name = sym.mangled_name || (sym.unmangleable(options) && sym.name);
+            if (m == name) continue out;
+        }
+        return m;
+    }
+});
+
+AST_Function.DEFMETHOD("next_mangled", function(options, def){
+    // #179, #326
+    // in Safari strict mode, something like (function x(x){...}) is a syntax error;
+    // a function expression's argument cannot shadow the function expression's name
+
+    var tricky_def = def.orig[0] instanceof AST_SymbolFunarg && this.name && this.name.definition();
+    while (true) {
+        var name = AST_Lambda.prototype.next_mangled.call(this, options, def);
+        if (!(tricky_def && tricky_def.mangled_name == name))
+            return name;
+    }
+});
+
+AST_Scope.DEFMETHOD("references", function(sym){
+    if (sym instanceof AST_Symbol) sym = sym.definition();
+    return this.enclosed.indexOf(sym) < 0 ? null : sym;
+});
+
+AST_Symbol.DEFMETHOD("unmangleable", function(options){
+    return this.definition().unmangleable(options);
+});
+
+// property accessors are not mangleable
+AST_SymbolAccessor.DEFMETHOD("unmangleable", function(){
+    return true;
+});
+
+// labels are always mangleable
+AST_Label.DEFMETHOD("unmangleable", function(){
+    return false;
+});
+
+AST_Symbol.DEFMETHOD("unreferenced", function(){
+    return this.definition().references.length == 0
+        && !(this.scope.uses_eval || this.scope.uses_with);
+});
+
+AST_Symbol.DEFMETHOD("undeclared", function(){
+    return this.definition().undeclared;
+});
+
+AST_LabelRef.DEFMETHOD("undeclared", function(){
+    return false;
+});
+
+AST_Label.DEFMETHOD("undeclared", function(){
+    return false;
+});
+
+AST_Symbol.DEFMETHOD("definition", function(){
+    return this.thedef;
+});
+
+AST_Symbol.DEFMETHOD("global", function(){
+    return this.definition().global;
+});
+
+AST_Toplevel.DEFMETHOD("_default_mangler_options", function(options){
+    return defaults(options, {
+        except   : [],
+        eval     : false,
+        sort     : false,
+        toplevel : false,
+        screw_ie8 : false
+    });
+});
+
+AST_Toplevel.DEFMETHOD("mangle_names", function(options){
+    options = this._default_mangler_options(options);
+    // We only need to mangle declaration nodes.  Special logic wired
+    // into the code generator will display the mangled name if it's
+    // present (and for AST_SymbolRef-s it'll use the mangled name of
+    // the AST_SymbolDeclaration that it points to).
+    var lname = -1;
+    var to_mangle = [];
+    var tw = new TreeWalker(function(node, descend){
+        if (node instanceof AST_LabeledStatement) {
+            // lname is incremented when we get to the AST_Label
+            var save_nesting = lname;
+            descend();
+            lname = save_nesting;
+            return true;        // don't descend again in TreeWalker
+        }
+        if (node instanceof AST_Scope) {
+            var p = tw.parent(), a = [];
+            node.variables.each(function(symbol){
+                if (options.except.indexOf(symbol.name) < 0) {
+                    a.push(symbol);
                 }
-                node.reference();
-                return true;
-            }
-        });
-        self.walk(tw);
-    });
-    AST_Scope.DEFMETHOD("init_scope_vars", function(nesting) {
-        this.directives = [];
-        this.variables = new Dictionary();
-        this.functions = new Dictionary();
-        this.uses_with = false;
-        this.uses_eval = false;
-        this.parent_scope = null;
-        this.enclosed = [];
-        this.cname = -1;
-        this.nesting = nesting;
-    });
-    AST_Scope.DEFMETHOD("strict", function() {
-        return this.has_directive("use strict");
-    });
-    AST_Lambda.DEFMETHOD("init_scope_vars", function() {
-        AST_Scope.prototype.init_scope_vars.apply(this, arguments);
-        this.uses_arguments = false;
-    });
-    AST_SymbolRef.DEFMETHOD("reference", function() {
-        var def = this.definition();
-        def.references.push(this);
-        var s = this.scope;
-        while (s) {
-            push_uniq(s.enclosed, def);
-            if (s === def.scope) break;
-            s = s.parent_scope;
-        }
-        this.frame = this.scope.nesting - def.scope.nesting;
-    });
-    AST_SymbolDeclaration.DEFMETHOD("init_scope_vars", function() {
-        this.init = [];
-    });
-    AST_Label.DEFMETHOD("init_scope_vars", function() {
-        this.references = [];
-    });
-    AST_LabelRef.DEFMETHOD("reference", function() {
-        this.thedef.references.push(this);
-    });
-    AST_Scope.DEFMETHOD("find_variable", function(name) {
-        if (name instanceof AST_Symbol) name = name.name;
-        return this.variables.get(name) || this.parent_scope && this.parent_scope.find_variable(name);
-    });
-    AST_Scope.DEFMETHOD("has_directive", function(value) {
-        return this.parent_scope && this.parent_scope.has_directive(value) || (this.directives.indexOf(value) >= 0 ? this : null);
-    });
-    AST_Scope.DEFMETHOD("def_function", function(symbol) {
-        this.functions.set(symbol.name, this.def_variable(symbol));
-    });
-    AST_Scope.DEFMETHOD("def_variable", function(symbol) {
-        var def;
-        if (!this.variables.has(symbol.name)) {
-            def = new SymbolDef(this, this.variables.size(), symbol);
-            this.variables.set(symbol.name, def);
-            def.global = !this.parent_scope;
-        } else {
-            def = this.variables.get(symbol.name);
-            def.orig.push(symbol);
-        }
-        return symbol.thedef = def;
-    });
-    AST_Scope.DEFMETHOD("next_mangled", function(options) {
-        var ext = this.enclosed, n = ext.length;
-        out: while (true) {
-            var m = base54(++this.cname);
-            if (!is_identifier(m)) continue;
-            for (var i = n; --i >= 0; ) {
-                var sym = ext[i];
-                var name = sym.mangled_name || sym.unmangleable(options) && sym.name;
-                if (m == name) continue out;
-            }
-            return m;
-        }
-    });
-    AST_Scope.DEFMETHOD("references", function(sym) {
-        if (sym instanceof AST_Symbol) sym = sym.definition();
-        return this.enclosed.indexOf(sym) < 0 ? null : sym;
-    });
-    AST_Symbol.DEFMETHOD("unmangleable", function(options) {
-        return this.definition().unmangleable(options);
-    });
-    AST_SymbolAccessor.DEFMETHOD("unmangleable", function() {
-        return true;
-    });
-    AST_Label.DEFMETHOD("unmangleable", function() {
-        return false;
-    });
-    AST_Symbol.DEFMETHOD("unreferenced", function() {
-        return this.definition().references.length == 0 && !(this.scope.uses_eval || this.scope.uses_with);
-    });
-    AST_Symbol.DEFMETHOD("undeclared", function() {
-        return this.definition().undeclared;
-    });
-    AST_LabelRef.DEFMETHOD("undeclared", function() {
-        return false;
-    });
-    AST_Label.DEFMETHOD("undeclared", function() {
-        return false;
-    });
-    AST_Symbol.DEFMETHOD("definition", function() {
-        return this.thedef;
-    });
-    AST_Symbol.DEFMETHOD("global", function() {
-        return this.definition().global;
-    });
-    AST_Toplevel.DEFMETHOD("_default_mangler_options", function(options) {
-        return defaults(options, {
-            except: [],
-            eval: false
-        });
-    });
-    AST_Toplevel.DEFMETHOD("mangle_names", function(options) {
-        options = this._default_mangler_options(options);
-        var lname = -1;
-        var to_mangle = [];
-        var tw = new TreeWalker(function(node, descend) {
-            if (node instanceof AST_LabeledStatement) {
-                var save_nesting = lname;
-                descend();
-                lname = save_nesting;
-                return true;
-            }
-            if (node instanceof AST_Scope) {
-                var p = tw.parent();
-                node.variables.each(function(symbol) {
-                    if (options.except.indexOf(symbol.name) < 0) {
-                        to_mangle.push(symbol);
-                    }
-                });
-                return;
-            }
-            if (node instanceof AST_Label) {
-                var name;
-                do name = base54(++lname); while (!is_identifier(name));
-                node.mangled_name = name;
-                return true;
-            }
-        });
-        this.walk(tw);
-        to_mangle.forEach(function(def) {
-            def.mangle(options);
-        });
-    });
-    AST_Toplevel.DEFMETHOD("compute_char_frequency", function(options) {
-        options = this._default_mangler_options(options);
-        var tw = new TreeWalker(function(node) {
-            if (node instanceof AST_Constant) base54.consider(node.print_to_string()); else if (node instanceof AST_Return) base54.consider("return"); else if (node instanceof AST_Throw) base54.consider("throw"); else if (node instanceof AST_Continue) base54.consider("continue"); else if (node instanceof AST_Break) base54.consider("break"); else if (node instanceof AST_Debugger) base54.consider("debugger"); else if (node instanceof AST_Directive) base54.consider(node.value); else if (node instanceof AST_While) base54.consider("while"); else if (node instanceof AST_Do) base54.consider("do while"); else if (node instanceof AST_If) {
-                base54.consider("if");
-                if (node.alternative) base54.consider("else");
-            } else if (node instanceof AST_Var) base54.consider("var"); else if (node instanceof AST_Const) base54.consider("const"); else if (node instanceof AST_Lambda) base54.consider("function"); else if (node instanceof AST_For) base54.consider("for"); else if (node instanceof AST_ForIn) base54.consider("for in"); else if (node instanceof AST_Switch) base54.consider("switch"); else if (node instanceof AST_Case) base54.consider("case"); else if (node instanceof AST_Default) base54.consider("default"); else if (node instanceof AST_With) base54.consider("with"); else if (node instanceof AST_ObjectSetter) base54.consider("set" + node.key); else if (node instanceof AST_ObjectGetter) base54.consider("get" + node.key); else if (node instanceof AST_ObjectKeyVal) base54.consider(node.key); else if (node instanceof AST_New) base54.consider("new"); else if (node instanceof AST_This) base54.consider("this"); else if (node instanceof AST_Try) base54.consider("try"); else if (node instanceof AST_Catch) base54.consider("catch"); else if (node instanceof AST_Finally) base54.consider("finally"); else if (node instanceof AST_Symbol && node.unmangleable(options)) base54.consider(node.name); else if (node instanceof AST_Unary || node instanceof AST_Binary) base54.consider(node.operator); else if (node instanceof AST_Dot) base54.consider(node.property);
-        });
-        this.walk(tw);
-        base54.sort();
-    });
-    var base54 = function() {
-        var string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$_0123456789";
-        var chars, frequency;
-        function reset() {
-            frequency = Object.create(null);
-            chars = string.split("").map(function(ch) {
-                return ch.charCodeAt(0);
             });
-            chars.forEach(function(ch) {
-                frequency[ch] = 0;
+            if (options.sort) a.sort(function(a, b){
+                return b.references.length - a.references.length;
+            });
+            to_mangle.push.apply(to_mangle, a);
+            return;
+        }
+        if (node instanceof AST_Label) {
+            var name;
+            do name = base54(++lname); while (!is_identifier(name));
+            node.mangled_name = name;
+            return true;
+        }
+    });
+    this.walk(tw);
+    to_mangle.forEach(function(def){ def.mangle(options) });
+});
+
+AST_Toplevel.DEFMETHOD("compute_char_frequency", function(options){
+    options = this._default_mangler_options(options);
+    var tw = new TreeWalker(function(node){
+        if (node instanceof AST_Constant)
+            base54.consider(node.print_to_string());
+        else if (node instanceof AST_Return)
+            base54.consider("return");
+        else if (node instanceof AST_Throw)
+            base54.consider("throw");
+        else if (node instanceof AST_Continue)
+            base54.consider("continue");
+        else if (node instanceof AST_Break)
+            base54.consider("break");
+        else if (node instanceof AST_Debugger)
+            base54.consider("debugger");
+        else if (node instanceof AST_Directive)
+            base54.consider(node.value);
+        else if (node instanceof AST_While)
+            base54.consider("while");
+        else if (node instanceof AST_Do)
+            base54.consider("do while");
+        else if (node instanceof AST_If) {
+            base54.consider("if");
+            if (node.alternative) base54.consider("else");
+        }
+        else if (node instanceof AST_Var)
+            base54.consider("var");
+        else if (node instanceof AST_Const)
+            base54.consider("const");
+        else if (node instanceof AST_Lambda)
+            base54.consider("function");
+        else if (node instanceof AST_For)
+            base54.consider("for");
+        else if (node instanceof AST_ForIn)
+            base54.consider("for in");
+        else if (node instanceof AST_Switch)
+            base54.consider("switch");
+        else if (node instanceof AST_Case)
+            base54.consider("case");
+        else if (node instanceof AST_Default)
+            base54.consider("default");
+        else if (node instanceof AST_With)
+            base54.consider("with");
+        else if (node instanceof AST_ObjectSetter)
+            base54.consider("set" + node.key);
+        else if (node instanceof AST_ObjectGetter)
+            base54.consider("get" + node.key);
+        else if (node instanceof AST_ObjectKeyVal)
+            base54.consider(node.key);
+        else if (node instanceof AST_New)
+            base54.consider("new");
+        else if (node instanceof AST_This)
+            base54.consider("this");
+        else if (node instanceof AST_Try)
+            base54.consider("try");
+        else if (node instanceof AST_Catch)
+            base54.consider("catch");
+        else if (node instanceof AST_Finally)
+            base54.consider("finally");
+        else if (node instanceof AST_Symbol && node.unmangleable(options))
+            base54.consider(node.name);
+        else if (node instanceof AST_Unary || node instanceof AST_Binary)
+            base54.consider(node.operator);
+        else if (node instanceof AST_Dot)
+            base54.consider(node.property);
+    });
+    this.walk(tw);
+    base54.sort();
+});
+
+var base54 = (function() {
+    var string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$_0123456789";
+    var chars, frequency;
+    function reset() {
+        frequency = Object.create(null);
+        chars = string.split("").map(function(ch){ return ch.charCodeAt(0) });
+        chars.forEach(function(ch){ frequency[ch] = 0 });
+    }
+    base54.consider = function(str){
+        for (var i = str.length; --i >= 0;) {
+            var code = str.charCodeAt(i);
+            if (code in frequency) ++frequency[code];
+        }
+    };
+    base54.sort = function() {
+        chars = mergeSort(chars, function(a, b){
+            if (is_digit(a) && !is_digit(b)) return 1;
+            if (is_digit(b) && !is_digit(a)) return -1;
+            return frequency[b] - frequency[a];
+        });
+    };
+    base54.reset = reset;
+    reset();
+    base54.get = function(){ return chars };
+    base54.freq = function(){ return frequency };
+    function base54(num) {
+        var ret = "", base = 54;
+        do {
+            ret += String.fromCharCode(chars[num % base]);
+            num = Math.floor(num / base);
+            base = 64;
+        } while (num > 0);
+        return ret;
+    };
+    return base54;
+})();
+
+AST_Toplevel.DEFMETHOD("scope_warnings", function(options){
+    options = defaults(options, {
+        undeclared       : false, // this makes a lot of noise
+        unreferenced     : true,
+        assign_to_global : true,
+        func_arguments   : true,
+        nested_defuns    : true,
+        eval             : true
+    });
+    var tw = new TreeWalker(function(node){
+        if (options.undeclared
+            && node instanceof AST_SymbolRef
+            && node.undeclared())
+        {
+            // XXX: this also warns about JS standard names,
+            // i.e. Object, Array, parseInt etc.  Should add a list of
+            // exceptions.
+            AST_Node.warn("Undeclared symbol: {name} [{file}:{line},{col}]", {
+                name: node.name,
+                file: node.start.file,
+                line: node.start.line,
+                col: node.start.col
             });
         }
-        base54.consider = function(str) {
-            for (var i = str.length; --i >= 0; ) {
-                var code = str.charCodeAt(i);
-                if (code in frequency) ++frequency[code];
+        if (options.assign_to_global)
+        {
+            var sym = null;
+            if (node instanceof AST_Assign && node.left instanceof AST_SymbolRef)
+                sym = node.left;
+            else if (node instanceof AST_ForIn && node.init instanceof AST_SymbolRef)
+                sym = node.init;
+            if (sym
+                && (sym.undeclared()
+                    || (sym.global() && sym.scope !== sym.definition().scope))) {
+                AST_Node.warn("{msg}: {name} [{file}:{line},{col}]", {
+                    msg: sym.undeclared() ? "Accidental global?" : "Assignment to global",
+                    name: sym.name,
+                    file: sym.start.file,
+                    line: sym.start.line,
+                    col: sym.start.col
+                });
             }
-        };
-        base54.sort = function() {
-            chars = mergeSort(chars, function(a, b) {
-                if (is_digit(a) && !is_digit(b)) return 1;
-                if (is_digit(b) && !is_digit(a)) return -1;
-                return frequency[b] - frequency[a];
-            });
-        };
-        base54.reset = reset;
-        reset();
-        base54.get = function() {
-            return chars;
-        };
-        base54.freq = function() {
-            return frequency;
-        };
-        function base54(num) {
-            var ret = "", base = 54;
-            do {
-                ret += String.fromCharCode(chars[num % base]);
-                num = Math.floor(num / base);
-                base = 64;
-            } while (num > 0);
-            return ret;
         }
-        return base54;
-    }();
-    AST_Toplevel.DEFMETHOD("scope_warnings", function(options) {
-        options = defaults(options, {
-            undeclared: false,
-            unreferenced: true,
-            assign_to_global: true,
-            func_arguments: true,
-            nested_defuns: true,
-            eval: true
-        });
-        var tw = new TreeWalker(function(node) {
-            if (options.undeclared && node instanceof AST_SymbolRef && node.undeclared()) {
-                AST_Node.warn("Undeclared symbol: {name} [{file}:{line},{col}]", {
-                    name: node.name,
-                    file: node.start.file,
-                    line: node.start.line,
-                    col: node.start.col
-                });
-            }
-            if (options.assign_to_global) {
-                var sym = null;
-                if (node instanceof AST_Assign && node.left instanceof AST_SymbolRef) sym = node.left; else if (node instanceof AST_ForIn && node.init instanceof AST_SymbolRef) sym = node.init;
-                if (sym && (sym.undeclared() || sym.global() && sym.scope !== sym.definition().scope)) {
-                    AST_Node.warn("{msg}: {name} [{file}:{line},{col}]", {
-                        msg: sym.undeclared() ? "Accidental global?" : "Assignment to global",
-                        name: sym.name,
-                        file: sym.start.file,
-                        line: sym.start.line,
-                        col: sym.start.col
-                    });
-                }
-            }
-            if (options.eval && node instanceof AST_SymbolRef && node.undeclared() && node.name == "eval") {
-                AST_Node.warn("Eval is used [{file}:{line},{col}]", node.start);
-            }
-            if (options.unreferenced && (node instanceof AST_SymbolDeclaration || node instanceof AST_Label) && node.unreferenced()) {
-                AST_Node.warn("{type} {name} is declared but not referenced [{file}:{line},{col}]", {
-                    type: node instanceof AST_Label ? "Label" : "Symbol",
-                    name: node.name,
-                    file: node.start.file,
-                    line: node.start.line,
-                    col: node.start.col
-                });
-            }
-            if (options.func_arguments && node instanceof AST_Lambda && node.uses_arguments) {
-                AST_Node.warn("arguments used in function {name} [{file}:{line},{col}]", {
-                    name: node.name ? node.name.name : "anonymous",
-                    file: node.start.file,
-                    line: node.start.line,
-                    col: node.start.col
-                });
-            }
-            if (options.nested_defuns && node instanceof AST_Defun && !(tw.parent() instanceof AST_Scope)) {
-                AST_Node.warn('Function {name} declared in nested statement "{type}" [{file}:{line},{col}]', {
-                    name: node.name.name,
-                    type: tw.parent().TYPE,
-                    file: node.start.file,
-                    line: node.start.line,
-                    col: node.start.col
-                });
-            }
-        });
-        this.walk(tw);
+        if (options.eval
+            && node instanceof AST_SymbolRef
+            && node.undeclared()
+            && node.name == "eval") {
+            AST_Node.warn("Eval is used [{file}:{line},{col}]", node.start);
+        }
+        if (options.unreferenced
+            && (node instanceof AST_SymbolDeclaration || node instanceof AST_Label)
+            && node.unreferenced()) {
+            AST_Node.warn("{type} {name} is declared but not referenced [{file}:{line},{col}]", {
+                type: node instanceof AST_Label ? "Label" : "Symbol",
+                name: node.name,
+                file: node.start.file,
+                line: node.start.line,
+                col: node.start.col
+            });
+        }
+        if (options.func_arguments
+            && node instanceof AST_Lambda
+            && node.uses_arguments) {
+            AST_Node.warn("arguments used in function {name} [{file}:{line},{col}]", {
+                name: node.name ? node.name.name : "anonymous",
+                file: node.start.file,
+                line: node.start.line,
+                col: node.start.col
+            });
+        }
+        if (options.nested_defuns
+            && node instanceof AST_Defun
+            && !(tw.parent() instanceof AST_Scope)) {
+            AST_Node.warn("Function {name} declared in nested statement \"{type}\" [{file}:{line},{col}]", {
+                name: node.name.name,
+                type: tw.parent().TYPE,
+                file: node.start.file,
+                line: node.start.line,
+                col: node.start.col
+            });
+        }
     });
-    "use strict";
-    function OutputStream(options) {
-        options = defaults(options, {
-            indent_start: 0,
-            indent_level: 4,
-            quote_keys: false,
-            space_colon: true,
-            ascii_only: false,
-            inline_script: false,
-            width: 80,
-            max_line_len: 32e3,
-            ie_proof: true,
-            beautify: false,
-            source_map: null,
-            bracketize: false,
-            semicolons: true,
-            comments: false
-        }, true);
-        var indentation = 0;
-        var current_col = 0;
-        var current_line = 1;
-        var current_pos = 0;
-        var OUTPUT = "";
-        function to_ascii(str) {
-            return str.replace(/[\u0080-\uffff]/g, function(ch) {
-                var code = ch.charCodeAt(0).toString(16);
+    this.walk(tw);
+});
+
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+function OutputStream(options) {
+
+    options = defaults(options, {
+        indent_start     : 0,
+        indent_level     : 4,
+        quote_keys       : false,
+        space_colon      : true,
+        ascii_only       : false,
+        unescape_regexps : false,
+        inline_script    : false,
+        width            : 80,
+        max_line_len     : 32000,
+        beautify         : false,
+        source_map       : null,
+        bracketize       : false,
+        semicolons       : true,
+        comments         : false,
+        preserve_line    : false,
+        screw_ie8        : false,
+        preamble         : null,
+    }, true);
+
+    var indentation = 0;
+    var current_col = 0;
+    var current_line = 1;
+    var current_pos = 0;
+    var OUTPUT = "";
+
+    function to_ascii(str, identifier) {
+        return str.replace(/[\u0080-\uffff]/g, function(ch) {
+            var code = ch.charCodeAt(0).toString(16);
+            if (code.length <= 2 && !identifier) {
+                while (code.length < 2) code = "0" + code;
+                return "\\x" + code;
+            } else {
                 while (code.length < 4) code = "0" + code;
                 return "\\u" + code;
-            });
-        }
-        function make_string(str) {
-            var dq = 0, sq = 0;
-            str = str.replace(/[\\\b\f\n\r\t\x22\x27\u2028\u2029\0]/g, function(s) {
-                switch (s) {
-                  case "\\":
-                    return "\\\\";
-
-                  case "\b":
-                    return "\\b";
-
-                  case "\f":
-                    return "\\f";
-
-                  case "\n":
-                    return "\\n";
-
-                  case "\r":
-                    return "\\r";
-
-                  case "\u2028":
-                    return "\\u2028";
-
-                  case "\u2029":
-                    return "\\u2029";
-
-                  case '"':
-                    ++dq;
-                    return '"';
-
-                  case "'":
-                    ++sq;
-                    return "'";
-
-                  case "\0":
-                    return "\\0";
-                }
-                return s;
-            });
-            if (options.ascii_only) str = to_ascii(str);
-            if (dq > sq) return "'" + str.replace(/\x27/g, "\\'") + "'"; else return '"' + str.replace(/\x22/g, '\\"') + '"';
-        }
-        function encode_string(str) {
-            var ret = make_string(str);
-            if (options.inline_script) ret = ret.replace(/<\x2fscript([>\/\t\n\f\r ])/gi, "<\\/script$1");
-            return ret;
-        }
-        function make_name(name) {
-            name = name.toString();
-            if (options.ascii_only) name = to_ascii(name);
-            return name;
-        }
-        function make_indent(back) {
-            return repeat_string(" ", options.indent_start + indentation - back * options.indent_level);
-        }
-        var might_need_space = false;
-        var might_need_semicolon = false;
-        var last = null;
-        function last_char() {
-            return last.charAt(last.length - 1);
-        }
-        function maybe_newline() {
-            if (options.max_line_len && current_col > options.max_line_len) print("\n");
-        }
-        var requireSemicolonChars = makePredicate("( [ + * / - , .");
-        function print(str) {
-            str = String(str);
-            var ch = str.charAt(0);
-            if (might_need_semicolon) {
-                if ((!ch || ";}".indexOf(ch) < 0) && !/[;]$/.test(last)) {
-                    if (options.semicolons || requireSemicolonChars(ch)) {
-                        OUTPUT += ";";
-                        current_col++;
-                        current_pos++;
-                    } else {
-                        OUTPUT += "\n";
-                        current_pos++;
-                        current_line++;
-                        current_col = 0;
-                    }
-                    if (!options.beautify) might_need_space = false;
-                }
-                might_need_semicolon = false;
-                maybe_newline();
             }
-            if (might_need_space) {
-                var prev = last_char();
-                if (is_identifier_char(prev) && (is_identifier_char(ch) || ch == "\\") || /^[\+\-\/]$/.test(ch) && ch == prev) {
-                    OUTPUT += " ";
+        });
+    };
+
+    function make_string(str) {
+        var dq = 0, sq = 0;
+        str = str.replace(/[\\\b\f\n\r\t\x22\x27\u2028\u2029\0]/g, function(s){
+            switch (s) {
+              case "\\": return "\\\\";
+              case "\b": return "\\b";
+              case "\f": return "\\f";
+              case "\n": return "\\n";
+              case "\r": return "\\r";
+              case "\u2028": return "\\u2028";
+              case "\u2029": return "\\u2029";
+              case '"': ++dq; return '"';
+              case "'": ++sq; return "'";
+              case "\0": return "\\x00";
+            }
+            return s;
+        });
+        if (options.ascii_only) str = to_ascii(str);
+        if (dq > sq) return "'" + str.replace(/\x27/g, "\\'") + "'";
+        else return '"' + str.replace(/\x22/g, '\\"') + '"';
+    };
+
+    function encode_string(str) {
+        var ret = make_string(str);
+        if (options.inline_script)
+            ret = ret.replace(/<\x2fscript([>\/\t\n\f\r ])/gi, "<\\/script$1");
+        return ret;
+    };
+
+    function make_name(name) {
+        name = name.toString();
+        if (options.ascii_only)
+            name = to_ascii(name, true);
+        return name;
+    };
+
+    function make_indent(back) {
+        return repeat_string(" ", options.indent_start + indentation - back * options.indent_level);
+    };
+
+    /* -----[ beautification/minification ]----- */
+
+    var might_need_space = false;
+    var might_need_semicolon = false;
+    var last = null;
+
+    function last_char() {
+        return last.charAt(last.length - 1);
+    };
+
+    function maybe_newline() {
+        if (options.max_line_len && current_col > options.max_line_len)
+            print("\n");
+    };
+
+    var requireSemicolonChars = makePredicate("( [ + * / - , .");
+
+    function print(str) {
+        str = String(str);
+        var ch = str.charAt(0);
+        if (might_need_semicolon) {
+            if ((!ch || ";}".indexOf(ch) < 0) && !/[;]$/.test(last)) {
+                if (options.semicolons || requireSemicolonChars(ch)) {
+                    OUTPUT += ";";
                     current_col++;
                     current_pos++;
+                } else {
+                    OUTPUT += "\n";
+                    current_pos++;
+                    current_line++;
+                    current_col = 0;
                 }
+                if (!options.beautify)
+                    might_need_space = false;
+            }
+            might_need_semicolon = false;
+            maybe_newline();
+        }
+
+        if (!options.beautify && options.preserve_line && stack[stack.length - 1]) {
+            var target_line = stack[stack.length - 1].start.line;
+            while (current_line < target_line) {
+                OUTPUT += "\n";
+                current_pos++;
+                current_line++;
+                current_col = 0;
                 might_need_space = false;
             }
-            var a = str.split(/\r?\n/), n = a.length - 1;
-            current_line += n;
-            if (n == 0) {
-                current_col += a[n].length;
-            } else {
-                current_col = a[n].length;
+        }
+
+        if (might_need_space) {
+            var prev = last_char();
+            if ((is_identifier_char(prev)
+                 && (is_identifier_char(ch) || ch == "\\"))
+                || (/^[\+\-\/]$/.test(ch) && ch == prev))
+            {
+                OUTPUT += " ";
+                current_col++;
+                current_pos++;
             }
-            current_pos += str.length;
-            last = str;
-            OUTPUT += str;
+            might_need_space = false;
         }
-        var space = options.beautify ? function() {
-            print(" ");
-        } : function() {
-            might_need_space = true;
-        };
-        var indent = options.beautify ? function(half) {
-            if (options.beautify) {
-                print(make_indent(half ? .5 : 0));
-            }
-        } : noop;
-        var with_indent = options.beautify ? function(col, cont) {
-            if (col === true) col = next_indent();
-            var save_indentation = indentation;
-            indentation = col;
-            var ret = cont();
-            indentation = save_indentation;
-            return ret;
-        } : function(col, cont) {
-            return cont();
-        };
-        var newline = options.beautify ? function() {
-            print("\n");
-        } : noop;
-        var semicolon = options.beautify ? function() {
-            print(";");
-        } : function() {
-            might_need_semicolon = true;
-        };
-        function force_semicolon() {
-            might_need_semicolon = false;
-            print(";");
+        var a = str.split(/\r?\n/), n = a.length - 1;
+        current_line += n;
+        if (n == 0) {
+            current_col += a[n].length;
+        } else {
+            current_col = a[n].length;
         }
-        function next_indent() {
-            return indentation + options.indent_level;
+        current_pos += str.length;
+        last = str;
+        OUTPUT += str;
+    };
+
+    var space = options.beautify ? function() {
+        print(" ");
+    } : function() {
+        might_need_space = true;
+    };
+
+    var indent = options.beautify ? function(half) {
+        if (options.beautify) {
+            print(make_indent(half ? 0.5 : 0));
         }
-        function with_block(cont) {
-            var ret;
-            print("{");
-            newline();
-            with_indent(next_indent(), function() {
-                ret = cont();
-            });
-            indent();
-            print("}");
-            return ret;
+    } : noop;
+
+    var with_indent = options.beautify ? function(col, cont) {
+        if (col === true) col = next_indent();
+        var save_indentation = indentation;
+        indentation = col;
+        var ret = cont();
+        indentation = save_indentation;
+        return ret;
+    } : function(col, cont) { return cont() };
+
+    var newline = options.beautify ? function() {
+        print("\n");
+    } : noop;
+
+    var semicolon = options.beautify ? function() {
+        print(";");
+    } : function() {
+        might_need_semicolon = true;
+    };
+
+    function force_semicolon() {
+        might_need_semicolon = false;
+        print(";");
+    };
+
+    function next_indent() {
+        return indentation + options.indent_level;
+    };
+
+    function with_block(cont) {
+        var ret;
+        print("{");
+        newline();
+        with_indent(next_indent(), function(){
+            ret = cont();
+        });
+        indent();
+        print("}");
+        return ret;
+    };
+
+    function with_parens(cont) {
+        print("(");
+        //XXX: still nice to have that for argument lists
+        //var ret = with_indent(current_col, cont);
+        var ret = cont();
+        print(")");
+        return ret;
+    };
+
+    function with_square(cont) {
+        print("[");
+        //var ret = with_indent(current_col, cont);
+        var ret = cont();
+        print("]");
+        return ret;
+    };
+
+    function comma() {
+        print(",");
+        space();
+    };
+
+    function colon() {
+        print(":");
+        if (options.space_colon) space();
+    };
+
+    var add_mapping = options.source_map ? function(token, name) {
+        try {
+            if (token) options.source_map.add(
+                token.file || "?",
+                current_line, current_col,
+                token.line, token.col,
+                (!name && token.type == "name") ? token.value : name
+            );
+        } catch(ex) {
+            AST_Node.warn("Couldn't figure out mapping for {file}:{line},{col} â†’ {cline},{ccol} [{name}]", {
+                file: token.file,
+                line: token.line,
+                col: token.col,
+                cline: current_line,
+                ccol: current_col,
+                name: name || ""
+            })
         }
-        function with_parens(cont) {
-            print("(");
-            var ret = cont();
-            print(")");
-            return ret;
-        }
-        function with_square(cont) {
-            print("[");
-            var ret = cont();
-            print("]");
-            return ret;
-        }
-        function comma() {
-            print(",");
-            space();
-        }
-        function colon() {
-            print(":");
-            if (options.space_colon) space();
-        }
-        var add_mapping = options.source_map ? function(token, name) {
-            try {
-                if (token) options.source_map.add(token.file || "?", current_line, current_col, token.line, token.col, !name && token.type == "name" ? token.value : name);
-            } catch (ex) {
-                AST_Node.warn("Couldn't figure out mapping for {file}:{line},{col} â†’ {cline},{ccol} [{name}]", {
-                    file: token.file,
-                    line: token.line,
-                    col: token.col,
-                    cline: current_line,
-                    ccol: current_col,
-                    name: name || ""
-                });
-            }
-        } : noop;
-        function get() {
-            return OUTPUT;
-        }
-        var stack = [];
-        return {
-            get: get,
-            toString: get,
-            indent: indent,
-            indentation: function() {
-                return indentation;
-            },
-            current_width: function() {
-                return current_col - indentation;
-            },
-            should_break: function() {
-                return options.width && this.current_width() >= options.width;
-            },
-            newline: newline,
-            print: print,
-            space: space,
-            comma: comma,
-            colon: colon,
-            last: function() {
-                return last;
-            },
-            semicolon: semicolon,
-            force_semicolon: force_semicolon,
-            to_ascii: to_ascii,
-            print_name: function(name) {
-                print(make_name(name));
-            },
-            print_string: function(str) {
-                print(encode_string(str));
-            },
-            next_indent: next_indent,
-            with_indent: with_indent,
-            with_block: with_block,
-            with_parens: with_parens,
-            with_square: with_square,
-            add_mapping: add_mapping,
-            option: function(opt) {
-                return options[opt];
-            },
-            line: function() {
-                return current_line;
-            },
-            col: function() {
-                return current_col;
-            },
-            pos: function() {
-                return current_pos;
-            },
-            push_node: function(node) {
-                stack.push(node);
-            },
-            pop_node: function() {
-                return stack.pop();
-            },
-            stack: function() {
-                return stack;
-            },
-            parent: function(n) {
-                return stack[stack.length - 2 - (n || 0)];
-            }
-        };
+    } : noop;
+
+    function get() {
+        return OUTPUT;
+    };
+
+    if (options.preamble) {
+        print(options.preamble.replace(/\r\n?|[\n\u2028\u2029]|\s*$/g, "\n"));
     }
-    (function() {
-        function DEFPRINT(nodetype, generator) {
-            nodetype.DEFMETHOD("print", function(stream) {
-                var self = this;
-                stream.push_node(self);
-                if (self.needs_parens(stream)) {
-                    stream.with_parens(function() {
-                        self.add_comments(stream);
-                        self.add_source_map(stream);
-                        generator(self, stream);
-                    });
-                } else {
-                    self.add_comments(stream);
-                    self.add_source_map(stream);
-                    generator(self, stream);
-                }
-                stream.pop_node();
-            });
+
+    var stack = [];
+    return {
+        get             : get,
+        toString        : get,
+        indent          : indent,
+        indentation     : function() { return indentation },
+        current_width   : function() { return current_col - indentation },
+        should_break    : function() { return options.width && this.current_width() >= options.width },
+        newline         : newline,
+        print           : print,
+        space           : space,
+        comma           : comma,
+        colon           : colon,
+        last            : function() { return last },
+        semicolon       : semicolon,
+        force_semicolon : force_semicolon,
+        to_ascii        : to_ascii,
+        print_name      : function(name) { print(make_name(name)) },
+        print_string    : function(str) { print(encode_string(str)) },
+        next_indent     : next_indent,
+        with_indent     : with_indent,
+        with_block      : with_block,
+        with_parens     : with_parens,
+        with_square     : with_square,
+        add_mapping     : add_mapping,
+        option          : function(opt) { return options[opt] },
+        line            : function() { return current_line },
+        col             : function() { return current_col },
+        pos             : function() { return current_pos },
+        push_node       : function(node) { stack.push(node) },
+        pop_node        : function() { return stack.pop() },
+        stack           : function() { return stack },
+        parent          : function(n) {
+            return stack[stack.length - 2 - (n || 0)];
         }
-        AST_Node.DEFMETHOD("print_to_string", function(options) {
-            var s = OutputStream(options);
-            this.print(s);
-            return s.get();
-        });
-        AST_Node.DEFMETHOD("add_comments", function(output) {
-            var c = output.option("comments"), self = this;
-            if (c) {
-                var start = self.start;
-                if (start && !start._comments_dumped) {
-                    start._comments_dumped = true;
-                    var comments = start.comments_before;
-                    if (c.test) {
-                        comments = comments.filter(function(comment) {
-                            return c.test(comment.value);
-                        });
-                    } else if (typeof c == "function") {
-                        comments = comments.filter(function(comment) {
-                            return c(self, comment);
-                        });
-                    }
-                    comments.forEach(function(c) {
-                        if (c.type == "comment1") {
-                            output.print("//" + c.value + "\n");
-                            output.indent();
-                        } else if (c.type == "comment2") {
-                            output.print("/*" + c.value + "*/");
-                            if (start.nlb) {
-                                output.print("\n");
-                                output.indent();
-                            } else {
-                                output.space();
-                            }
+    };
+
+};
+
+/* -----[ code generators ]----- */
+
+(function(){
+
+    /* -----[ utils ]----- */
+
+    function DEFPRINT(nodetype, generator) {
+        nodetype.DEFMETHOD("_codegen", generator);
+    };
+
+    AST_Node.DEFMETHOD("print", function(stream, force_parens){
+        var self = this, generator = self._codegen;
+        function doit() {
+            self.add_comments(stream);
+            self.add_source_map(stream);
+            generator(self, stream);
+        }
+        stream.push_node(self);
+        if (force_parens || self.needs_parens(stream)) {
+            stream.with_parens(doit);
+        } else {
+            doit();
+        }
+        stream.pop_node();
+    });
+
+    AST_Node.DEFMETHOD("print_to_string", function(options){
+        var s = OutputStream(options);
+        this.print(s);
+        return s.get();
+    });
+
+    /* -----[ comments ]----- */
+
+    AST_Node.DEFMETHOD("add_comments", function(output){
+        var c = output.option("comments"), self = this;
+        if (c) {
+            var start = self.start;
+            if (start && !start._comments_dumped) {
+                start._comments_dumped = true;
+                var comments = start.comments_before || [];
+
+                // XXX: ugly fix for https://github.com/mishoo/UglifyJS2/issues/112
+                //               and https://github.com/mishoo/UglifyJS2/issues/372
+                if (self instanceof AST_Exit && self.value) {
+                    self.value.walk(new TreeWalker(function(node){
+                        if (node.start && node.start.comments_before) {
+                            comments = comments.concat(node.start.comments_before);
+                            node.start.comments_before = [];
                         }
+                        if (node instanceof AST_Function ||
+                            node instanceof AST_Array ||
+                            node instanceof AST_Object)
+                        {
+                            return true; // don't go inside.
+                        }
+                    }));
+                }
+
+                if (c.test) {
+                    comments = comments.filter(function(comment){
+                        return c.test(comment.value);
+                    });
+                } else if (typeof c == "function") {
+                    comments = comments.filter(function(comment){
+                        return c(self, comment);
                     });
                 }
-            }
-        });
-        function PARENS(nodetype, func) {
-            nodetype.DEFMETHOD("needs_parens", func);
-        }
-        PARENS(AST_Node, function() {
-            return false;
-        });
-        PARENS(AST_Function, function(output) {
-            return first_in_statement(output);
-        });
-        PARENS(AST_Object, function(output) {
-            return first_in_statement(output);
-        });
-        PARENS(AST_Unary, function(output) {
-            var p = output.parent();
-            return p instanceof AST_PropAccess && p.expression === this;
-        });
-        PARENS(AST_Seq, function(output) {
-            var p = output.parent();
-            return p instanceof AST_Call || p instanceof AST_Unary || p instanceof AST_Binary || p instanceof AST_VarDef || p instanceof AST_Dot || p instanceof AST_Array || p instanceof AST_ObjectProperty || p instanceof AST_Conditional;
-        });
-        PARENS(AST_Binary, function(output) {
-            var p = output.parent();
-            if (p instanceof AST_Call && p.expression === this) return true;
-            if (p instanceof AST_Unary) return true;
-            if (p instanceof AST_PropAccess && p.expression === this) return true;
-            if (p instanceof AST_Binary) {
-                var po = p.operator, pp = PRECEDENCE[po];
-                var so = this.operator, sp = PRECEDENCE[so];
-                if (pp > sp || pp == sp && this === p.right && !(so == po && (so == "*" || so == "&&" || so == "||"))) {
-                    return true;
-                }
-            }
-            if (this.operator == "in") {
-                if ((p instanceof AST_For || p instanceof AST_ForIn) && p.init === this) return true;
-                if (p instanceof AST_VarDef) {
-                    var v = output.parent(1), p2 = output.parent(2);
-                    if ((p2 instanceof AST_For || p2 instanceof AST_ForIn) && p2.init === v) return true;
-                }
-            }
-        });
-        PARENS(AST_PropAccess, function(output) {
-            var p = output.parent();
-            if (p instanceof AST_New && p.expression === this) {
-                try {
-                    this.walk(new TreeWalker(function(node) {
-                        if (node instanceof AST_Call) throw p;
-                    }));
-                } catch (ex) {
-                    if (ex !== p) throw ex;
-                    return true;
-                }
-            }
-        });
-        PARENS(AST_Call, function(output) {
-            var p = output.parent();
-            return p instanceof AST_New && p.expression === this;
-        });
-        PARENS(AST_New, function(output) {
-            var p = output.parent();
-            if (no_constructor_parens(this, output) && (p instanceof AST_Dot || p instanceof AST_Call && p.expression === this)) return true;
-        });
-        function assign_and_conditional_paren_rules(output) {
-            var p = output.parent();
-            if (p instanceof AST_Unary) return true;
-            if (p instanceof AST_Binary && !(p instanceof AST_Assign)) return true;
-            if (p instanceof AST_Call && p.expression === this) return true;
-            if (p instanceof AST_Conditional && p.condition === this) return true;
-            if (p instanceof AST_PropAccess && p.expression === this) return true;
-        }
-        PARENS(AST_Assign, assign_and_conditional_paren_rules);
-        PARENS(AST_Conditional, assign_and_conditional_paren_rules);
-        DEFPRINT(AST_Directive, function(self, output) {
-            output.print_string(self.value);
-            output.semicolon();
-        });
-        DEFPRINT(AST_Debugger, function(self, output) {
-            output.print("debugger");
-            output.semicolon();
-        });
-        function display_body(body, is_toplevel, output) {
-            var last = body.length - 1;
-            body.forEach(function(stmt, i) {
-                if (!(stmt instanceof AST_EmptyStatement)) {
-                    output.indent();
-                    stmt.print(output);
-                    if (!(i == last && is_toplevel)) {
-                        output.newline();
-                        if (is_toplevel) output.newline();
+                comments.forEach(function(c){
+                    if (/comment[134]/.test(c.type)) {
+                        output.print("//" + c.value + "\n");
+                        output.indent();
                     }
-                }
-            });
-        }
-        AST_StatementWithBody.DEFMETHOD("_do_print_body", function(output) {
-            force_statement(this.body, output);
-        });
-        DEFPRINT(AST_Statement, function(self, output) {
-            self.body.print(output);
-            output.semicolon();
-        });
-        DEFPRINT(AST_Toplevel, function(self, output) {
-            display_body(self.body, true, output);
-            output.print("");
-        });
-        DEFPRINT(AST_LabeledStatement, function(self, output) {
-            self.label.print(output);
-            output.colon();
-            self.body.print(output);
-        });
-        DEFPRINT(AST_SimpleStatement, function(self, output) {
-            self.body.print(output);
-            output.semicolon();
-        });
-        function print_bracketed(body, output) {
-            if (body.length > 0) output.with_block(function() {
-                display_body(body, false, output);
-            }); else output.print("{}");
-        }
-        DEFPRINT(AST_BlockStatement, function(self, output) {
-            print_bracketed(self.body, output);
-        });
-        DEFPRINT(AST_EmptyStatement, function(self, output) {
-            output.semicolon();
-        });
-        DEFPRINT(AST_Do, function(self, output) {
-            output.print("do");
-            output.space();
-            self._do_print_body(output);
-            output.space();
-            output.print("while");
-            output.space();
-            output.with_parens(function() {
-                self.condition.print(output);
-            });
-            output.semicolon();
-        });
-        DEFPRINT(AST_While, function(self, output) {
-            output.print("while");
-            output.space();
-            output.with_parens(function() {
-                self.condition.print(output);
-            });
-            output.space();
-            self._do_print_body(output);
-        });
-        DEFPRINT(AST_For, function(self, output) {
-            output.print("for");
-            output.space();
-            output.with_parens(function() {
-                if (self.init) {
-                    self.init.print(output);
-                    output.print(";");
-                    output.space();
-                } else {
-                    output.print(";");
-                }
-                if (self.condition) {
-                    self.condition.print(output);
-                    output.print(";");
-                    output.space();
-                } else {
-                    output.print(";");
-                }
-                if (self.step) {
-                    self.step.print(output);
-                }
-            });
-            output.space();
-            self._do_print_body(output);
-        });
-        DEFPRINT(AST_ForIn, function(self, output) {
-            output.print("for");
-            output.space();
-            output.with_parens(function() {
-                self.init.print(output);
-                output.space();
-                output.print("in");
-                output.space();
-                self.object.print(output);
-            });
-            output.space();
-            self._do_print_body(output);
-        });
-        DEFPRINT(AST_With, function(self, output) {
-            output.print("with");
-            output.space();
-            output.with_parens(function() {
-                self.expression.print(output);
-            });
-            output.space();
-            self._do_print_body(output);
-        });
-        AST_Lambda.DEFMETHOD("_do_print", function(output, nokeyword) {
-            var self = this;
-            if (!nokeyword) {
-                output.print("function");
-            }
-            if (self.name) {
-                output.space();
-                self.name.print(output);
-            }
-            output.with_parens(function() {
-                self.argnames.forEach(function(arg, i) {
-                    if (i) output.comma();
-                    arg.print(output);
-                });
-            });
-            output.space();
-            print_bracketed(self.body, output);
-        });
-        DEFPRINT(AST_Lambda, function(self, output) {
-            self._do_print(output);
-        });
-        AST_Exit.DEFMETHOD("_do_print", function(output, kind) {
-            output.print(kind);
-            if (this.value) {
-                output.space();
-                this.value.print(output);
-            }
-            output.semicolon();
-        });
-        DEFPRINT(AST_Return, function(self, output) {
-            self._do_print(output, "return");
-        });
-        DEFPRINT(AST_Throw, function(self, output) {
-            self._do_print(output, "throw");
-        });
-        AST_LoopControl.DEFMETHOD("_do_print", function(output, kind) {
-            output.print(kind);
-            if (this.label) {
-                output.space();
-                this.label.print(output);
-            }
-            output.semicolon();
-        });
-        DEFPRINT(AST_Break, function(self, output) {
-            self._do_print(output, "break");
-        });
-        DEFPRINT(AST_Continue, function(self, output) {
-            self._do_print(output, "continue");
-        });
-        function make_then(self, output) {
-            if (output.option("bracketize")) {
-                make_block(self.body, output);
-                return;
-            }
-            if (!self.body) return output.semicolon();
-            if (self.body instanceof AST_Do && output.option("ie_proof")) {
-                make_block(self.body, output);
-                return;
-            }
-            var b = self.body;
-            while (true) {
-                if (b instanceof AST_If) {
-                    if (!b.alternative) {
-                        make_block(self.body, output);
-                        return;
+                    else if (c.type == "comment2") {
+                        output.print("/*" + c.value + "*/");
+                        if (start.nlb) {
+                            output.print("\n");
+                            output.indent();
+                        } else {
+                            output.space();
+                        }
                     }
-                    b = b.alternative;
-                } else if (b instanceof AST_StatementWithBody) {
-                    b = b.body;
-                } else break;
-            }
-            self.body.print(output);
-        }
-        DEFPRINT(AST_If, function(self, output) {
-            output.print("if");
-            output.space();
-            output.with_parens(function() {
-                self.condition.print(output);
-            });
-            output.space();
-            if (self.alternative) {
-                make_then(self, output);
-                output.space();
-                output.print("else");
-                output.space();
-                force_statement(self.alternative, output);
-            } else {
-                self._do_print_body(output);
-            }
-        });
-        DEFPRINT(AST_Switch, function(self, output) {
-            output.print("switch");
-            output.space();
-            output.with_parens(function() {
-                self.expression.print(output);
-            });
-            output.space();
-            if (self.body.length > 0) output.with_block(function() {
-                self.body.forEach(function(stmt, i) {
-                    if (i) output.newline();
-                    output.indent(true);
-                    stmt.print(output);
-                });
-            }); else output.print("{}");
-        });
-        AST_SwitchBranch.DEFMETHOD("_do_print_body", function(output) {
-            if (this.body.length > 0) {
-                output.newline();
-                this.body.forEach(function(stmt) {
-                    output.indent();
-                    stmt.print(output);
-                    output.newline();
                 });
             }
-        });
-        DEFPRINT(AST_Default, function(self, output) {
-            output.print("default:");
-            self._do_print_body(output);
-        });
-        DEFPRINT(AST_Case, function(self, output) {
-            output.print("case");
-            output.space();
-            self.expression.print(output);
-            output.print(":");
-            self._do_print_body(output);
-        });
-        DEFPRINT(AST_Try, function(self, output) {
-            output.print("try");
-            output.space();
-            print_bracketed(self.body, output);
-            if (self.bcatch) {
-                output.space();
-                self.bcatch.print(output);
-            }
-            if (self.bfinally) {
-                output.space();
-                self.bfinally.print(output);
-            }
-        });
-        DEFPRINT(AST_Catch, function(self, output) {
-            output.print("catch");
-            output.space();
-            output.with_parens(function() {
-                self.argname.print(output);
-            });
-            output.space();
-            print_bracketed(self.body, output);
-        });
-        DEFPRINT(AST_Finally, function(self, output) {
-            output.print("finally");
-            output.space();
-            print_bracketed(self.body, output);
-        });
-        AST_Definitions.DEFMETHOD("_do_print", function(output, kind) {
-            output.print(kind);
-            output.space();
-            this.definitions.forEach(function(def, i) {
-                if (i) output.comma();
-                def.print(output);
-            });
-            var p = output.parent();
-            var in_for = p instanceof AST_For || p instanceof AST_ForIn;
-            var avoid_semicolon = in_for && p.init === this;
-            if (!avoid_semicolon) output.semicolon();
-        });
-        DEFPRINT(AST_Var, function(self, output) {
-            self._do_print(output, "var");
-        });
-        DEFPRINT(AST_Const, function(self, output) {
-            self._do_print(output, "const");
-        });
-        DEFPRINT(AST_VarDef, function(self, output) {
-            self.name.print(output);
-            if (self.value) {
-                output.space();
-                output.print("=");
-                output.space();
-                self.value.print(output);
-            }
-        });
-        DEFPRINT(AST_Call, function(self, output) {
-            self.expression.print(output);
-            if (self instanceof AST_New && no_constructor_parens(self, output)) return;
-            output.with_parens(function() {
-                self.args.forEach(function(expr, i) {
-                    if (i) output.comma();
-                    expr.print(output);
-                });
-            });
-        });
-        DEFPRINT(AST_New, function(self, output) {
-            output.print("new");
-            output.space();
-            AST_Call.prototype.print.call(self, output);
-        });
-        AST_Seq.DEFMETHOD("_do_print", function(output) {
-            this.car.print(output);
-            if (this.cdr) {
-                output.comma();
-                if (output.should_break()) {
-                    output.newline();
-                    output.indent();
-                }
-                this.cdr.print(output);
-            }
-        });
-        DEFPRINT(AST_Seq, function(self, output) {
-            self._do_print(output);
-        });
-        DEFPRINT(AST_Dot, function(self, output) {
-            var expr = self.expression;
-            expr.print(output);
-            if (expr instanceof AST_Number) {
-                if (!/[xa-f.]/i.test(output.last())) {
-                    output.print(".");
-                }
-            }
-            output.print(".");
-            output.add_mapping(self.end);
-            output.print_name(self.property);
-        });
-        DEFPRINT(AST_Sub, function(self, output) {
-            self.expression.print(output);
-            output.print("[");
-            self.property.print(output);
-            output.print("]");
-        });
-        DEFPRINT(AST_UnaryPrefix, function(self, output) {
-            var op = self.operator;
-            output.print(op);
-            if (/^[a-z]/i.test(op)) output.space();
-            self.expression.print(output);
-        });
-        DEFPRINT(AST_UnaryPostfix, function(self, output) {
-            self.expression.print(output);
-            output.print(self.operator);
-        });
-        DEFPRINT(AST_Binary, function(self, output) {
-            self.left.print(output);
-            output.space();
-            output.print(self.operator);
-            output.space();
-            self.right.print(output);
-        });
-        DEFPRINT(AST_Conditional, function(self, output) {
-            self.condition.print(output);
-            output.space();
-            output.print("?");
-            output.space();
-            self.consequent.print(output);
-            output.space();
-            output.colon();
-            self.alternative.print(output);
-        });
-        DEFPRINT(AST_Array, function(self, output) {
-            output.with_square(function() {
-                var a = self.elements, len = a.length;
-                if (len > 0) output.space();
-                a.forEach(function(exp, i) {
-                    if (i) output.comma();
-                    if (!(exp instanceof AST_Undefined)) exp.print(output);
-                });
-                if (len > 0) output.space();
-            });
-        });
-        DEFPRINT(AST_Object, function(self, output) {
-            if (self.properties.length > 0) output.with_block(function() {
-                self.properties.forEach(function(prop, i) {
-                    if (i) {
-                        output.print(",");
-                        output.newline();
-                    }
-                    output.indent();
-                    prop.print(output);
-                });
-                output.newline();
-            }); else output.print("{}");
-        });
-        DEFPRINT(AST_ObjectKeyVal, function(self, output) {
-            var key = self.key;
-            if (output.option("quote_keys")) {
-                output.print_string(key);
-            } else if ((typeof key == "number" || !output.option("beautify") && +key + "" == key) && parseFloat(key) >= 0) {
-                output.print(make_num(key));
-            } else if (!is_identifier(key)) {
-                output.print_string(key);
-            } else {
-                output.print_name(key);
-            }
-            output.colon();
-            self.value.print(output);
-        });
-        DEFPRINT(AST_ObjectSetter, function(self, output) {
-            output.print("set");
-            self.value._do_print(output, true);
-        });
-        DEFPRINT(AST_ObjectGetter, function(self, output) {
-            output.print("get");
-            self.value._do_print(output, true);
-        });
-        DEFPRINT(AST_Symbol, function(self, output) {
-            var def = self.definition();
-            output.print_name(def ? def.mangled_name || def.name : self.name);
-        });
-        DEFPRINT(AST_Undefined, function(self, output) {
-            output.print("void 0");
-        });
-        DEFPRINT(AST_Infinity, function(self, output) {
-            output.print("1/0");
-        });
-        DEFPRINT(AST_NaN, function(self, output) {
-            output.print("0/0");
-        });
-        DEFPRINT(AST_This, function(self, output) {
-            output.print("this");
-        });
-        DEFPRINT(AST_Constant, function(self, output) {
-            output.print(self.getValue());
-        });
-        DEFPRINT(AST_String, function(self, output) {
-            output.print_string(self.getValue());
-        });
-        DEFPRINT(AST_Number, function(self, output) {
-            output.print(make_num(self.getValue()));
-        });
-        DEFPRINT(AST_RegExp, function(self, output) {
-            var str = self.getValue().toString();
-            if (output.option("ascii_only")) str = output.to_ascii(str);
-            output.print(str);
-        });
-        function force_statement(stat, output) {
-            if (output.option("bracketize")) {
-                if (!stat || stat instanceof AST_EmptyStatement) output.print("{}"); else if (stat instanceof AST_BlockStatement) stat.print(output); else output.with_block(function() {
-                    output.indent();
-                    stat.print(output);
-                    output.newline();
-                });
-            } else {
-                if (!stat || stat instanceof AST_EmptyStatement) output.force_semicolon(); else stat.print(output);
+        }
+    });
+
+    /* -----[ PARENTHESES ]----- */
+
+    function PARENS(nodetype, func) {
+        nodetype.DEFMETHOD("needs_parens", func);
+    };
+
+    PARENS(AST_Node, function(){
+        return false;
+    });
+
+    // a function expression needs parens around it when it's provably
+    // the first token to appear in a statement.
+    PARENS(AST_Function, function(output){
+        return first_in_statement(output);
+    });
+
+    // same goes for an object literal, because otherwise it would be
+    // interpreted as a block of code.
+    PARENS(AST_Object, function(output){
+        return first_in_statement(output);
+    });
+
+    PARENS(AST_Unary, function(output){
+        var p = output.parent();
+        return p instanceof AST_PropAccess && p.expression === this;
+    });
+
+    PARENS(AST_Seq, function(output){
+        var p = output.parent();
+        return p instanceof AST_Call             // (foo, bar)() or foo(1, (2, 3), 4)
+            || p instanceof AST_Unary            // !(foo, bar, baz)
+            || p instanceof AST_Binary           // 1 + (2, 3) + 4 ==> 8
+            || p instanceof AST_VarDef           // var a = (1, 2), b = a + a; ==> b == 4
+            || p instanceof AST_PropAccess       // (1, {foo:2}).foo or (1, {foo:2})["foo"] ==> 2
+            || p instanceof AST_Array            // [ 1, (2, 3), 4 ] ==> [ 1, 3, 4 ]
+            || p instanceof AST_ObjectProperty   // { foo: (1, 2) }.foo ==> 2
+            || p instanceof AST_Conditional      /* (false, true) ? (a = 10, b = 20) : (c = 30)
+                                                  * ==> 20 (side effect, set a := 10 and b := 20) */
+        ;
+    });
+
+    PARENS(AST_Binary, function(output){
+        var p = output.parent();
+        // (foo && bar)()
+        if (p instanceof AST_Call && p.expression === this)
+            return true;
+        // typeof (foo && bar)
+        if (p instanceof AST_Unary)
+            return true;
+        // (foo && bar)["prop"], (foo && bar).prop
+        if (p instanceof AST_PropAccess && p.expression === this)
+            return true;
+        // this deals with precedence: 3 * (2 + 1)
+        if (p instanceof AST_Binary) {
+            var po = p.operator, pp = PRECEDENCE[po];
+            var so = this.operator, sp = PRECEDENCE[so];
+            if (pp > sp
+                || (pp == sp
+                    && this === p.right)) {
+                return true;
             }
         }
-        function first_in_statement(output) {
-            var a = output.stack(), i = a.length, node = a[--i], p = a[--i];
-            while (i > 0) {
-                if (p instanceof AST_Statement && p.body === node) return true;
-                if (p instanceof AST_Seq && p.car === node || p instanceof AST_Call && p.expression === node || p instanceof AST_Dot && p.expression === node || p instanceof AST_Sub && p.expression === node || p instanceof AST_Conditional && p.condition === node || p instanceof AST_Binary && p.left === node || p instanceof AST_UnaryPostfix && p.expression === node) {
-                    node = p;
-                    p = a[--i];
-                } else {
-                    return false;
-                }
+    });
+
+    PARENS(AST_PropAccess, function(output){
+        var p = output.parent();
+        if (p instanceof AST_New && p.expression === this) {
+            // i.e. new (foo.bar().baz)
+            //
+            // if there's one call into this subtree, then we need
+            // parens around it too, otherwise the call will be
+            // interpreted as passing the arguments to the upper New
+            // expression.
+            try {
+                this.walk(new TreeWalker(function(node){
+                    if (node instanceof AST_Call) throw p;
+                }));
+            } catch(ex) {
+                if (ex !== p) throw ex;
+                return true;
             }
         }
-        function no_constructor_parens(self, output) {
-            return self.args.length == 0 && !output.option("beautify");
-        }
-        function best_of(a) {
-            var best = a[0], len = best.length;
-            for (var i = 1; i < a.length; ++i) {
-                if (a[i].length < len) {
-                    best = a[i];
-                    len = best.length;
-                }
-            }
-            return best;
-        }
-        function make_num(num) {
-            var str = num.toString(10), a = [ str.replace(/^0\./, ".").replace("e+", "e") ], m;
-            if (Math.floor(num) === num) {
-                if (num >= 0) {
-                    a.push("0x" + num.toString(16).toLowerCase(), "0" + num.toString(8));
-                } else {
-                    a.push("-0x" + (-num).toString(16).toLowerCase(), "-0" + (-num).toString(8));
-                }
-                if (m = /^(.*?)(0+)$/.exec(num)) {
-                    a.push(m[1] + "e" + m[2].length);
-                }
-            } else if (m = /^0?\.(0+)(.*)$/.exec(num)) {
-                a.push(m[2] + "e-" + (m[1].length + m[2].length), str.substr(str.indexOf(".")));
-            }
-            return best_of(a);
-        }
-        function make_block(stmt, output) {
-            if (stmt instanceof AST_BlockStatement) {
+    });
+
+    PARENS(AST_Call, function(output){
+        var p = output.parent(), p1;
+        if (p instanceof AST_New && p.expression === this)
+            return true;
+
+        // workaround for Safari bug.
+        // https://bugs.webkit.org/show_bug.cgi?id=123506
+        return this.expression instanceof AST_Function
+            && p instanceof AST_PropAccess
+            && p.expression === this
+            && (p1 = output.parent(1)) instanceof AST_Assign
+            && p1.left === p;
+    });
+
+    PARENS(AST_New, function(output){
+        var p = output.parent();
+        if (no_constructor_parens(this, output)
+            && (p instanceof AST_PropAccess // (new Date).getTime(), (new Date)["getTime"]()
+                || p instanceof AST_Call && p.expression === this)) // (new foo)(bar)
+            return true;
+    });
+
+    PARENS(AST_Number, function(output){
+        var p = output.parent();
+        if (this.getValue() < 0 && p instanceof AST_PropAccess && p.expression === this)
+            return true;
+    });
+
+    PARENS(AST_NaN, function(output){
+        var p = output.parent();
+        if (p instanceof AST_PropAccess && p.expression === this)
+            return true;
+    });
+
+    function assign_and_conditional_paren_rules(output) {
+        var p = output.parent();
+        // !(a = false) â†’ true
+        if (p instanceof AST_Unary)
+            return true;
+        // 1 + (a = 2) + 3 â†’ 6, side effect setting a = 2
+        if (p instanceof AST_Binary && !(p instanceof AST_Assign))
+            return true;
+        // (a = func)() â€”orâ€” new (a = Object)()
+        if (p instanceof AST_Call && p.expression === this)
+            return true;
+        // (a = foo) ? bar : baz
+        if (p instanceof AST_Conditional && p.condition === this)
+            return true;
+        // (a = foo)["prop"] â€”orâ€” (a = foo).prop
+        if (p instanceof AST_PropAccess && p.expression === this)
+            return true;
+    };
+
+    PARENS(AST_Assign, assign_and_conditional_paren_rules);
+    PARENS(AST_Conditional, assign_and_conditional_paren_rules);
+
+    /* -----[ PRINTERS ]----- */
+
+    DEFPRINT(AST_Directive, function(self, output){
+        output.print_string(self.value);
+        output.semicolon();
+    });
+    DEFPRINT(AST_Debugger, function(self, output){
+        output.print("debugger");
+        output.semicolon();
+    });
+
+    /* -----[ statements ]----- */
+
+    function display_body(body, is_toplevel, output) {
+        var last = body.length - 1;
+        body.forEach(function(stmt, i){
+            if (!(stmt instanceof AST_EmptyStatement)) {
+                output.indent();
                 stmt.print(output);
-                return;
+                if (!(i == last && is_toplevel)) {
+                    output.newline();
+                    if (is_toplevel) output.newline();
+                }
             }
-            output.with_block(function() {
+        });
+    };
+
+    AST_StatementWithBody.DEFMETHOD("_do_print_body", function(output){
+        force_statement(this.body, output);
+    });
+
+    DEFPRINT(AST_Statement, function(self, output){
+        self.body.print(output);
+        output.semicolon();
+    });
+    DEFPRINT(AST_Toplevel, function(self, output){
+        display_body(self.body, true, output);
+        output.print("");
+    });
+    DEFPRINT(AST_LabeledStatement, function(self, output){
+        self.label.print(output);
+        output.colon();
+        self.body.print(output);
+    });
+    DEFPRINT(AST_SimpleStatement, function(self, output){
+        self.body.print(output);
+        output.semicolon();
+    });
+    function print_bracketed(body, output) {
+        if (body.length > 0) output.with_block(function(){
+            display_body(body, false, output);
+        });
+        else output.print("{}");
+    };
+    DEFPRINT(AST_BlockStatement, function(self, output){
+        print_bracketed(self.body, output);
+    });
+    DEFPRINT(AST_EmptyStatement, function(self, output){
+        output.semicolon();
+    });
+    DEFPRINT(AST_Do, function(self, output){
+        output.print("do");
+        output.space();
+        self._do_print_body(output);
+        output.space();
+        output.print("while");
+        output.space();
+        output.with_parens(function(){
+            self.condition.print(output);
+        });
+        output.semicolon();
+    });
+    DEFPRINT(AST_While, function(self, output){
+        output.print("while");
+        output.space();
+        output.with_parens(function(){
+            self.condition.print(output);
+        });
+        output.space();
+        self._do_print_body(output);
+    });
+    DEFPRINT(AST_For, function(self, output){
+        output.print("for");
+        output.space();
+        output.with_parens(function(){
+            if (self.init) {
+                if (self.init instanceof AST_Definitions) {
+                    self.init.print(output);
+                } else {
+                    parenthesize_for_noin(self.init, output, true);
+                }
+                output.print(";");
+                output.space();
+            } else {
+                output.print(";");
+            }
+            if (self.condition) {
+                self.condition.print(output);
+                output.print(";");
+                output.space();
+            } else {
+                output.print(";");
+            }
+            if (self.step) {
+                self.step.print(output);
+            }
+        });
+        output.space();
+        self._do_print_body(output);
+    });
+    DEFPRINT(AST_ForIn, function(self, output){
+        output.print("for");
+        output.space();
+        output.with_parens(function(){
+            self.init.print(output);
+            output.space();
+            output.print("in");
+            output.space();
+            self.object.print(output);
+        });
+        output.space();
+        self._do_print_body(output);
+    });
+    DEFPRINT(AST_With, function(self, output){
+        output.print("with");
+        output.space();
+        output.with_parens(function(){
+            self.expression.print(output);
+        });
+        output.space();
+        self._do_print_body(output);
+    });
+
+    /* -----[ functions ]----- */
+    AST_Lambda.DEFMETHOD("_do_print", function(output, nokeyword){
+        var self = this;
+        if (!nokeyword) {
+            output.print("function");
+        }
+        if (self.name) {
+            output.space();
+            self.name.print(output);
+        }
+        output.with_parens(function(){
+            self.argnames.forEach(function(arg, i){
+                if (i) output.comma();
+                arg.print(output);
+            });
+        });
+        output.space();
+        print_bracketed(self.body, output);
+    });
+    DEFPRINT(AST_Lambda, function(self, output){
+        self._do_print(output);
+    });
+
+    /* -----[ exits ]----- */
+    AST_Exit.DEFMETHOD("_do_print", function(output, kind){
+        output.print(kind);
+        if (this.value) {
+            output.space();
+            this.value.print(output);
+        }
+        output.semicolon();
+    });
+    DEFPRINT(AST_Return, function(self, output){
+        self._do_print(output, "return");
+    });
+    DEFPRINT(AST_Throw, function(self, output){
+        self._do_print(output, "throw");
+    });
+
+    /* -----[ loop control ]----- */
+    AST_LoopControl.DEFMETHOD("_do_print", function(output, kind){
+        output.print(kind);
+        if (this.label) {
+            output.space();
+            this.label.print(output);
+        }
+        output.semicolon();
+    });
+    DEFPRINT(AST_Break, function(self, output){
+        self._do_print(output, "break");
+    });
+    DEFPRINT(AST_Continue, function(self, output){
+        self._do_print(output, "continue");
+    });
+
+    /* -----[ if ]----- */
+    function make_then(self, output) {
+        if (output.option("bracketize")) {
+            make_block(self.body, output);
+            return;
+        }
+        // The squeezer replaces "block"-s that contain only a single
+        // statement with the statement itself; technically, the AST
+        // is correct, but this can create problems when we output an
+        // IF having an ELSE clause where the THEN clause ends in an
+        // IF *without* an ELSE block (then the outer ELSE would refer
+        // to the inner IF).  This function checks for this case and
+        // adds the block brackets if needed.
+        if (!self.body)
+            return output.force_semicolon();
+        if (self.body instanceof AST_Do
+            && !output.option("screw_ie8")) {
+            // https://github.com/mishoo/UglifyJS/issues/#issue/57 IE
+            // croaks with "syntax error" on code like this: if (foo)
+            // do ... while(cond); else ...  we need block brackets
+            // around do/while
+            make_block(self.body, output);
+            return;
+        }
+        var b = self.body;
+        while (true) {
+            if (b instanceof AST_If) {
+                if (!b.alternative) {
+                    make_block(self.body, output);
+                    return;
+                }
+                b = b.alternative;
+            }
+            else if (b instanceof AST_StatementWithBody) {
+                b = b.body;
+            }
+            else break;
+        }
+        force_statement(self.body, output);
+    };
+    DEFPRINT(AST_If, function(self, output){
+        output.print("if");
+        output.space();
+        output.with_parens(function(){
+            self.condition.print(output);
+        });
+        output.space();
+        if (self.alternative) {
+            make_then(self, output);
+            output.space();
+            output.print("else");
+            output.space();
+            force_statement(self.alternative, output);
+        } else {
+            self._do_print_body(output);
+        }
+    });
+
+    /* -----[ switch ]----- */
+    DEFPRINT(AST_Switch, function(self, output){
+        output.print("switch");
+        output.space();
+        output.with_parens(function(){
+            self.expression.print(output);
+        });
+        output.space();
+        if (self.body.length > 0) output.with_block(function(){
+            self.body.forEach(function(stmt, i){
+                if (i) output.newline();
+                output.indent(true);
+                stmt.print(output);
+            });
+        });
+        else output.print("{}");
+    });
+    AST_SwitchBranch.DEFMETHOD("_do_print_body", function(output){
+        if (this.body.length > 0) {
+            output.newline();
+            this.body.forEach(function(stmt){
                 output.indent();
                 stmt.print(output);
                 output.newline();
             });
         }
-        function DEFMAP(nodetype, generator) {
-            nodetype.DEFMETHOD("add_source_map", function(stream) {
-                generator(this, stream);
-            });
+    });
+    DEFPRINT(AST_Default, function(self, output){
+        output.print("default:");
+        self._do_print_body(output);
+    });
+    DEFPRINT(AST_Case, function(self, output){
+        output.print("case");
+        output.space();
+        self.expression.print(output);
+        output.print(":");
+        self._do_print_body(output);
+    });
+
+    /* -----[ exceptions ]----- */
+    DEFPRINT(AST_Try, function(self, output){
+        output.print("try");
+        output.space();
+        print_bracketed(self.body, output);
+        if (self.bcatch) {
+            output.space();
+            self.bcatch.print(output);
         }
-        DEFMAP(AST_Node, noop);
-        function basic_sourcemap_gen(self, output) {
-            output.add_mapping(self.start);
-        }
-        DEFMAP(AST_Directive, basic_sourcemap_gen);
-        DEFMAP(AST_Debugger, basic_sourcemap_gen);
-        DEFMAP(AST_Symbol, basic_sourcemap_gen);
-        DEFMAP(AST_Jump, basic_sourcemap_gen);
-        DEFMAP(AST_StatementWithBody, basic_sourcemap_gen);
-        DEFMAP(AST_LabeledStatement, noop);
-        DEFMAP(AST_Lambda, basic_sourcemap_gen);
-        DEFMAP(AST_Switch, basic_sourcemap_gen);
-        DEFMAP(AST_SwitchBranch, basic_sourcemap_gen);
-        DEFMAP(AST_BlockStatement, basic_sourcemap_gen);
-        DEFMAP(AST_Toplevel, noop);
-        DEFMAP(AST_New, basic_sourcemap_gen);
-        DEFMAP(AST_Try, basic_sourcemap_gen);
-        DEFMAP(AST_Catch, basic_sourcemap_gen);
-        DEFMAP(AST_Finally, basic_sourcemap_gen);
-        DEFMAP(AST_Definitions, basic_sourcemap_gen);
-        DEFMAP(AST_Constant, basic_sourcemap_gen);
-        DEFMAP(AST_ObjectProperty, function(self, output) {
-            output.add_mapping(self.start, self.key);
-        });
-    })();
-    "use strict";
-    function Compressor(options, false_by_default) {
-        if (!(this instanceof Compressor)) return new Compressor(options, false_by_default);
-        TreeTransformer.call(this, this.before, this.after);
-        this.options = defaults(options, {
-            sequences: !false_by_default,
-            properties: !false_by_default,
-            dead_code: !false_by_default,
-            drop_debugger: !false_by_default,
-            unsafe: !false_by_default,
-            unsafe_comps: false,
-            conditionals: !false_by_default,
-            comparisons: !false_by_default,
-            evaluate: !false_by_default,
-            booleans: !false_by_default,
-            loops: !false_by_default,
-            unused: !false_by_default,
-            hoist_funs: !false_by_default,
-            hoist_vars: false,
-            if_return: !false_by_default,
-            join_vars: !false_by_default,
-            cascade: !false_by_default,
-            side_effects: !false_by_default,
-            warnings: true,
-            global_defs: {}
-        }, true);
-    }
-    Compressor.prototype = new TreeTransformer();
-    merge(Compressor.prototype, {
-        option: function(key) {
-            return this.options[key];
-        },
-        warn: function() {
-            if (this.options.warnings) AST_Node.warn.apply(AST_Node, arguments);
-        },
-        before: function(node, descend, in_list) {
-            if (node._squeezed) return node;
-            if (node instanceof AST_Scope) {
-                node.drop_unused(this);
-                node = node.hoist_declarations(this);
-            }
-            descend(node, this);
-            node = node.optimize(this);
-            if (node instanceof AST_Scope) {
-                var save_warnings = this.options.warnings;
-                this.options.warnings = false;
-                node.drop_unused(this);
-                this.options.warnings = save_warnings;
-            }
-            node._squeezed = true;
-            return node;
+        if (self.bfinally) {
+            output.space();
+            self.bfinally.print(output);
         }
     });
-    (function() {
-        function OPT(node, optimizer) {
-            node.DEFMETHOD("optimize", function(compressor) {
-                var self = this;
-                if (self._optimized) return self;
-                var opt = optimizer(self, compressor);
-                opt._optimized = true;
-                if (opt === self) return opt;
-                return opt.transform(compressor);
+    DEFPRINT(AST_Catch, function(self, output){
+        output.print("catch");
+        output.space();
+        output.with_parens(function(){
+            self.argname.print(output);
+        });
+        output.space();
+        print_bracketed(self.body, output);
+    });
+    DEFPRINT(AST_Finally, function(self, output){
+        output.print("finally");
+        output.space();
+        print_bracketed(self.body, output);
+    });
+
+    /* -----[ var/const ]----- */
+    AST_Definitions.DEFMETHOD("_do_print", function(output, kind){
+        output.print(kind);
+        output.space();
+        this.definitions.forEach(function(def, i){
+            if (i) output.comma();
+            def.print(output);
+        });
+        var p = output.parent();
+        var in_for = p instanceof AST_For || p instanceof AST_ForIn;
+        var avoid_semicolon = in_for && p.init === this;
+        if (!avoid_semicolon)
+            output.semicolon();
+    });
+    DEFPRINT(AST_Var, function(self, output){
+        self._do_print(output, "var");
+    });
+    DEFPRINT(AST_Const, function(self, output){
+        self._do_print(output, "const");
+    });
+
+    function parenthesize_for_noin(node, output, noin) {
+        if (!noin) node.print(output);
+        else try {
+            // need to take some precautions here:
+            //    https://github.com/mishoo/UglifyJS2/issues/60
+            node.walk(new TreeWalker(function(node){
+                if (node instanceof AST_Binary && node.operator == "in")
+                    throw output;
+            }));
+            node.print(output);
+        } catch(ex) {
+            if (ex !== output) throw ex;
+            node.print(output, true);
+        }
+    };
+
+    DEFPRINT(AST_VarDef, function(self, output){
+        self.name.print(output);
+        if (self.value) {
+            output.space();
+            output.print("=");
+            output.space();
+            var p = output.parent(1);
+            var noin = p instanceof AST_For || p instanceof AST_ForIn;
+            parenthesize_for_noin(self.value, output, noin);
+        }
+    });
+
+    /* -----[ other expressions ]----- */
+    DEFPRINT(AST_Call, function(self, output){
+        self.expression.print(output);
+        if (self instanceof AST_New && no_constructor_parens(self, output))
+            return;
+        output.with_parens(function(){
+            self.args.forEach(function(expr, i){
+                if (i) output.comma();
+                expr.print(output);
             });
-        }
-        OPT(AST_Node, function(self, compressor) {
-            return self;
         });
-        AST_Node.DEFMETHOD("equivalent_to", function(node) {
-            return this.print_to_string() == node.print_to_string();
+    });
+    DEFPRINT(AST_New, function(self, output){
+        output.print("new");
+        output.space();
+        AST_Call.prototype._codegen(self, output);
+    });
+
+    AST_Seq.DEFMETHOD("_do_print", function(output){
+        this.car.print(output);
+        if (this.cdr) {
+            output.comma();
+            if (output.should_break()) {
+                output.newline();
+                output.indent();
+            }
+            this.cdr.print(output);
+        }
+    });
+    DEFPRINT(AST_Seq, function(self, output){
+        self._do_print(output);
+        // var p = output.parent();
+        // if (p instanceof AST_Statement) {
+        //     output.with_indent(output.next_indent(), function(){
+        //         self._do_print(output);
+        //     });
+        // } else {
+        //     self._do_print(output);
+        // }
+    });
+    DEFPRINT(AST_Dot, function(self, output){
+        var expr = self.expression;
+        expr.print(output);
+        if (expr instanceof AST_Number && expr.getValue() >= 0) {
+            if (!/[xa-f.]/i.test(output.last())) {
+                output.print(".");
+            }
+        }
+        output.print(".");
+        // the name after dot would be mapped about here.
+        output.add_mapping(self.end);
+        output.print_name(self.property);
+    });
+    DEFPRINT(AST_Sub, function(self, output){
+        self.expression.print(output);
+        output.print("[");
+        self.property.print(output);
+        output.print("]");
+    });
+    DEFPRINT(AST_UnaryPrefix, function(self, output){
+        var op = self.operator;
+        output.print(op);
+        if (/^[a-z]/i.test(op))
+            output.space();
+        self.expression.print(output);
+    });
+    DEFPRINT(AST_UnaryPostfix, function(self, output){
+        self.expression.print(output);
+        output.print(self.operator);
+    });
+    DEFPRINT(AST_Binary, function(self, output){
+        self.left.print(output);
+        output.space();
+        output.print(self.operator);
+        if (self.operator == "<"
+            && self.right instanceof AST_UnaryPrefix
+            && self.right.operator == "!"
+            && self.right.expression instanceof AST_UnaryPrefix
+            && self.right.expression.operator == "--") {
+            // space is mandatory to avoid outputting <!--
+            // http://javascript.spec.whatwg.org/#comment-syntax
+            output.print(" ");
+        } else {
+            // the space is optional depending on "beautify"
+            output.space();
+        }
+        self.right.print(output);
+    });
+    DEFPRINT(AST_Conditional, function(self, output){
+        self.condition.print(output);
+        output.space();
+        output.print("?");
+        output.space();
+        self.consequent.print(output);
+        output.space();
+        output.colon();
+        self.alternative.print(output);
+    });
+
+    /* -----[ literals ]----- */
+    DEFPRINT(AST_Array, function(self, output){
+        output.with_square(function(){
+            var a = self.elements, len = a.length;
+            if (len > 0) output.space();
+            a.forEach(function(exp, i){
+                if (i) output.comma();
+                exp.print(output);
+                // If the final element is a hole, we need to make sure it
+                // doesn't look like a trailing comma, by inserting an actual
+                // trailing comma.
+                if (i === len - 1 && exp instanceof AST_Hole)
+                  output.comma();
+            });
+            if (len > 0) output.space();
         });
-        function make_node(ctor, orig, props) {
-            if (!props) props = {};
-            if (orig) {
-                if (!props.start) props.start = orig.start;
-                if (!props.end) props.end = orig.end;
+    });
+    DEFPRINT(AST_Object, function(self, output){
+        if (self.properties.length > 0) output.with_block(function(){
+            self.properties.forEach(function(prop, i){
+                if (i) {
+                    output.print(",");
+                    output.newline();
+                }
+                output.indent();
+                prop.print(output);
+            });
+            output.newline();
+        });
+        else output.print("{}");
+    });
+    DEFPRINT(AST_ObjectKeyVal, function(self, output){
+        var key = self.key;
+        if (output.option("quote_keys")) {
+            output.print_string(key + "");
+        } else if ((typeof key == "number"
+                    || !output.option("beautify")
+                    && +key + "" == key)
+                   && parseFloat(key) >= 0) {
+            output.print(make_num(key));
+        } else if (RESERVED_WORDS(key) ? output.option("screw_ie8") : is_identifier_string(key)) {
+            output.print_name(key);
+        } else {
+            output.print_string(key);
+        }
+        output.colon();
+        self.value.print(output);
+    });
+    DEFPRINT(AST_ObjectSetter, function(self, output){
+        output.print("set");
+        output.space();
+        self.key.print(output);
+        self.value._do_print(output, true);
+    });
+    DEFPRINT(AST_ObjectGetter, function(self, output){
+        output.print("get");
+        output.space();
+        self.key.print(output);
+        self.value._do_print(output, true);
+    });
+    DEFPRINT(AST_Symbol, function(self, output){
+        var def = self.definition();
+        output.print_name(def ? def.mangled_name || def.name : self.name);
+    });
+    DEFPRINT(AST_Undefined, function(self, output){
+        output.print("void 0");
+    });
+    DEFPRINT(AST_Hole, noop);
+    DEFPRINT(AST_Infinity, function(self, output){
+        output.print("1/0");
+    });
+    DEFPRINT(AST_NaN, function(self, output){
+        output.print("0/0");
+    });
+    DEFPRINT(AST_This, function(self, output){
+        output.print("this");
+    });
+    DEFPRINT(AST_Constant, function(self, output){
+        output.print(self.getValue());
+    });
+    DEFPRINT(AST_String, function(self, output){
+        output.print_string(self.getValue());
+    });
+    DEFPRINT(AST_Number, function(self, output){
+        output.print(make_num(self.getValue()));
+    });
+
+    function regexp_safe_literal(code) {
+        return [
+            0x5c   , // \
+            0x2f   , // /
+            0x2e   , // .
+            0x2b   , // +
+            0x2a   , // *
+            0x3f   , // ?
+            0x28   , // (
+            0x29   , // )
+            0x5b   , // [
+            0x5d   , // ]
+            0x7b   , // {
+            0x7d   , // }
+            0x24   , // $
+            0x5e   , // ^
+            0x3a   , // :
+            0x7c   , // |
+            0x21   , // !
+            0x0a   , // \n
+            0x0d   , // \r
+            0x00   , // \0
+            0xfeff , // Unicode BOM
+            0x2028 , // unicode "line separator"
+            0x2029 , // unicode "paragraph separator"
+        ].indexOf(code) < 0;
+    };
+
+    DEFPRINT(AST_RegExp, function(self, output){
+        var str = self.getValue().toString();
+        if (output.option("ascii_only")) {
+            str = output.to_ascii(str);
+        } else if (output.option("unescape_regexps")) {
+            str = str.split("\\\\").map(function(str){
+                return str.replace(/\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}/g, function(s){
+                    var code = parseInt(s.substr(2), 16);
+                    return regexp_safe_literal(code) ? String.fromCharCode(code) : s;
+                });
+            }).join("\\\\");
+        }
+        output.print(str);
+        var p = output.parent();
+        if (p instanceof AST_Binary && /^in/.test(p.operator) && p.left === self)
+            output.print(" ");
+    });
+
+    function force_statement(stat, output) {
+        if (output.option("bracketize")) {
+            if (!stat || stat instanceof AST_EmptyStatement)
+                output.print("{}");
+            else if (stat instanceof AST_BlockStatement)
+                stat.print(output);
+            else output.with_block(function(){
+                output.indent();
+                stat.print(output);
+                output.newline();
+            });
+        } else {
+            if (!stat || stat instanceof AST_EmptyStatement)
+                output.force_semicolon();
+            else
+                stat.print(output);
+        }
+    };
+
+    // return true if the node at the top of the stack (that means the
+    // innermost node in the current output) is lexically the first in
+    // a statement.
+    function first_in_statement(output) {
+        var a = output.stack(), i = a.length, node = a[--i], p = a[--i];
+        while (i > 0) {
+            if (p instanceof AST_Statement && p.body === node)
+                return true;
+            if ((p instanceof AST_Seq           && p.car === node        ) ||
+                (p instanceof AST_Call          && p.expression === node && !(p instanceof AST_New) ) ||
+                (p instanceof AST_Dot           && p.expression === node ) ||
+                (p instanceof AST_Sub           && p.expression === node ) ||
+                (p instanceof AST_Conditional   && p.condition === node  ) ||
+                (p instanceof AST_Binary        && p.left === node       ) ||
+                (p instanceof AST_UnaryPostfix  && p.expression === node ))
+            {
+                node = p;
+                p = a[--i];
+            } else {
+                return false;
             }
-            return new ctor(props);
         }
-        function make_node_from_constant(compressor, val, orig) {
-            if (val instanceof AST_Node) return val.transform(compressor);
-            switch (typeof val) {
-              case "string":
-                return make_node(AST_String, orig, {
-                    value: val
-                }).optimize(compressor);
+    };
 
-              case "number":
-                return make_node(isNaN(val) ? AST_NaN : AST_Number, orig, {
-                    value: val
-                }).optimize(compressor);
+    // self should be AST_New.  decide if we want to show parens or not.
+    function no_constructor_parens(self, output) {
+        return self.args.length == 0 && !output.option("beautify");
+    };
 
-              case "boolean":
-                return make_node(val ? AST_True : AST_False, orig);
-
-              case "undefined":
-                return make_node(AST_Undefined, orig).optimize(compressor);
-
-              default:
-                if (val === null) {
-                    return make_node(AST_Null, orig).optimize(compressor);
-                }
-                if (val instanceof RegExp) {
-                    return make_node(AST_RegExp, orig).optimize(compressor);
-                }
-                throw new Error(string_template("Can't handle constant of type: {type}", {
-                    type: typeof val
-                }));
+    function best_of(a) {
+        var best = a[0], len = best.length;
+        for (var i = 1; i < a.length; ++i) {
+            if (a[i].length < len) {
+                best = a[i];
+                len = best.length;
             }
         }
-        function as_statement_array(thing) {
-            if (thing === null) return [];
-            if (thing instanceof AST_BlockStatement) return thing.body;
-            if (thing instanceof AST_EmptyStatement) return [];
-            if (thing instanceof AST_Statement) return [ thing ];
-            throw new Error("Can't convert thing to statement array");
-        }
-        function is_empty(thing) {
-            if (thing === null) return true;
-            if (thing instanceof AST_EmptyStatement) return true;
-            if (thing instanceof AST_BlockStatement) return thing.body.length == 0;
-            return false;
-        }
-        function loop_body(x) {
-            if (x instanceof AST_Switch) return x;
-            if (x instanceof AST_For || x instanceof AST_ForIn || x instanceof AST_DWLoop) {
-                return x.body instanceof AST_BlockStatement ? x.body : x;
+        return best;
+    };
+
+    function make_num(num) {
+        var str = num.toString(10), a = [ str.replace(/^0\./, ".").replace('e+', 'e') ], m;
+        if (Math.floor(num) === num) {
+            if (num >= 0) {
+                a.push("0x" + num.toString(16).toLowerCase(), // probably pointless
+                       "0" + num.toString(8)); // same.
+            } else {
+                a.push("-0x" + (-num).toString(16).toLowerCase(), // probably pointless
+                       "-0" + (-num).toString(8)); // same.
             }
-            return x;
+            if ((m = /^(.*?)(0+)$/.exec(num))) {
+                a.push(m[1] + "e" + m[2].length);
+            }
+        } else if ((m = /^0?\.(0+)(.*)$/.exec(num))) {
+            a.push(m[2] + "e-" + (m[1].length + m[2].length),
+                   str.substr(str.indexOf(".")));
         }
-        function tighten_body(statements, compressor) {
-            var CHANGED;
-            do {
-                CHANGED = false;
-                statements = eliminate_spurious_blocks(statements);
-                if (compressor.option("dead_code")) {
-                    statements = eliminate_dead_code(statements, compressor);
-                }
-                if (compressor.option("if_return")) {
-                    statements = handle_if_return(statements, compressor);
-                }
-                if (compressor.option("sequences")) {
-                    statements = sequencesize(statements, compressor);
-                }
-                if (compressor.option("join_vars")) {
-                    statements = join_consecutive_vars(statements, compressor);
-                }
-            } while (CHANGED);
-            return statements;
-            function eliminate_spurious_blocks(statements) {
-                var seen_dirs = [];
-                return statements.reduce(function(a, stat) {
-                    if (stat instanceof AST_BlockStatement) {
-                        CHANGED = true;
-                        a.push.apply(a, eliminate_spurious_blocks(stat.body));
-                    } else if (stat instanceof AST_EmptyStatement) {
-                        CHANGED = true;
-                    } else if (stat instanceof AST_Directive) {
-                        if (seen_dirs.indexOf(stat.value) < 0) {
-                            a.push(stat);
-                            seen_dirs.push(stat.value);
-                        } else {
-                            CHANGED = true;
+        return best_of(a);
+    };
+
+    function make_block(stmt, output) {
+        if (stmt instanceof AST_BlockStatement) {
+            stmt.print(output);
+            return;
+        }
+        output.with_block(function(){
+            output.indent();
+            stmt.print(output);
+            output.newline();
+        });
+    };
+
+    /* -----[ source map generators ]----- */
+
+    function DEFMAP(nodetype, generator) {
+        nodetype.DEFMETHOD("add_source_map", function(stream){
+            generator(this, stream);
+        });
+    };
+
+    // We could easily add info for ALL nodes, but it seems to me that
+    // would be quite wasteful, hence this noop in the base class.
+    DEFMAP(AST_Node, noop);
+
+    function basic_sourcemap_gen(self, output) {
+        output.add_mapping(self.start);
+    };
+
+    // XXX: I'm not exactly sure if we need it for all of these nodes,
+    // or if we should add even more.
+
+    DEFMAP(AST_Directive, basic_sourcemap_gen);
+    DEFMAP(AST_Debugger, basic_sourcemap_gen);
+    DEFMAP(AST_Symbol, basic_sourcemap_gen);
+    DEFMAP(AST_Jump, basic_sourcemap_gen);
+    DEFMAP(AST_StatementWithBody, basic_sourcemap_gen);
+    DEFMAP(AST_LabeledStatement, noop); // since the label symbol will mark it
+    DEFMAP(AST_Lambda, basic_sourcemap_gen);
+    DEFMAP(AST_Switch, basic_sourcemap_gen);
+    DEFMAP(AST_SwitchBranch, basic_sourcemap_gen);
+    DEFMAP(AST_BlockStatement, basic_sourcemap_gen);
+    DEFMAP(AST_Toplevel, noop);
+    DEFMAP(AST_New, basic_sourcemap_gen);
+    DEFMAP(AST_Try, basic_sourcemap_gen);
+    DEFMAP(AST_Catch, basic_sourcemap_gen);
+    DEFMAP(AST_Finally, basic_sourcemap_gen);
+    DEFMAP(AST_Definitions, basic_sourcemap_gen);
+    DEFMAP(AST_Constant, basic_sourcemap_gen);
+    DEFMAP(AST_ObjectProperty, function(self, output){
+        output.add_mapping(self.start, self.key);
+    });
+
+})();
+
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+function Compressor(options, false_by_default) {
+    if (!(this instanceof Compressor))
+        return new Compressor(options, false_by_default);
+    TreeTransformer.call(this, this.before, this.after);
+    this.options = defaults(options, {
+        sequences     : !false_by_default,
+        properties    : !false_by_default,
+        dead_code     : !false_by_default,
+        drop_debugger : !false_by_default,
+        unsafe        : false,
+        unsafe_comps  : false,
+        conditionals  : !false_by_default,
+        comparisons   : !false_by_default,
+        evaluate      : !false_by_default,
+        booleans      : !false_by_default,
+        loops         : !false_by_default,
+        unused        : !false_by_default,
+        hoist_funs    : !false_by_default,
+        hoist_vars    : false,
+        if_return     : !false_by_default,
+        join_vars     : !false_by_default,
+        cascade       : !false_by_default,
+        side_effects  : !false_by_default,
+        pure_getters  : false,
+        pure_funcs    : null,
+        negate_iife   : !false_by_default,
+        screw_ie8     : false,
+        drop_console  : false,
+        angular       : false,
+
+        warnings      : true,
+        global_defs   : {}
+    }, true);
+};
+
+Compressor.prototype = new TreeTransformer;
+merge(Compressor.prototype, {
+    option: function(key) { return this.options[key] },
+    warn: function() {
+        if (this.options.warnings)
+            AST_Node.warn.apply(AST_Node, arguments);
+    },
+    before: function(node, descend, in_list) {
+        if (node._squeezed) return node;
+        var was_scope = false;
+        if (node instanceof AST_Scope) {
+            node = node.hoist_declarations(this);
+            was_scope = true;
+        }
+        descend(node, this);
+        node = node.optimize(this);
+        if (was_scope && node instanceof AST_Scope) {
+            node.drop_unused(this);
+            descend(node, this);
+        }
+        node._squeezed = true;
+        return node;
+    }
+});
+
+(function(){
+
+    function OPT(node, optimizer) {
+        node.DEFMETHOD("optimize", function(compressor){
+            var self = this;
+            if (self._optimized) return self;
+            var opt = optimizer(self, compressor);
+            opt._optimized = true;
+            if (opt === self) return opt;
+            return opt.transform(compressor);
+        });
+    };
+
+    OPT(AST_Node, function(self, compressor){
+        return self;
+    });
+
+    AST_Node.DEFMETHOD("equivalent_to", function(node){
+        // XXX: this is a rather expensive way to test two node's equivalence:
+        return this.print_to_string() == node.print_to_string();
+    });
+
+    function make_node(ctor, orig, props) {
+        if (!props) props = {};
+        if (orig) {
+            if (!props.start) props.start = orig.start;
+            if (!props.end) props.end = orig.end;
+        }
+        return new ctor(props);
+    };
+
+    function make_node_from_constant(compressor, val, orig) {
+        // XXX: WIP.
+        // if (val instanceof AST_Node) return val.transform(new TreeTransformer(null, function(node){
+        //     if (node instanceof AST_SymbolRef) {
+        //         var scope = compressor.find_parent(AST_Scope);
+        //         var def = scope.find_variable(node);
+        //         node.thedef = def;
+        //         return node;
+        //     }
+        // })).transform(compressor);
+
+        if (val instanceof AST_Node) return val.transform(compressor);
+        switch (typeof val) {
+          case "string":
+            return make_node(AST_String, orig, {
+                value: val
+            }).optimize(compressor);
+          case "number":
+            return make_node(isNaN(val) ? AST_NaN : AST_Number, orig, {
+                value: val
+            }).optimize(compressor);
+          case "boolean":
+            return make_node(val ? AST_True : AST_False, orig).optimize(compressor);
+          case "undefined":
+            return make_node(AST_Undefined, orig).optimize(compressor);
+          default:
+            if (val === null) {
+                return make_node(AST_Null, orig).optimize(compressor);
+            }
+            if (val instanceof RegExp) {
+                return make_node(AST_RegExp, orig).optimize(compressor);
+            }
+            throw new Error(string_template("Can't handle constant of type: {type}", {
+                type: typeof val
+            }));
+        }
+    };
+
+    function as_statement_array(thing) {
+        if (thing === null) return [];
+        if (thing instanceof AST_BlockStatement) return thing.body;
+        if (thing instanceof AST_EmptyStatement) return [];
+        if (thing instanceof AST_Statement) return [ thing ];
+        throw new Error("Can't convert thing to statement array");
+    };
+
+    function is_empty(thing) {
+        if (thing === null) return true;
+        if (thing instanceof AST_EmptyStatement) return true;
+        if (thing instanceof AST_BlockStatement) return thing.body.length == 0;
+        return false;
+    };
+
+    function loop_body(x) {
+        if (x instanceof AST_Switch) return x;
+        if (x instanceof AST_For || x instanceof AST_ForIn || x instanceof AST_DWLoop) {
+            return (x.body instanceof AST_BlockStatement ? x.body : x);
+        }
+        return x;
+    };
+
+    function tighten_body(statements, compressor) {
+        var CHANGED;
+        do {
+            CHANGED = false;
+            if (compressor.option("angular")) {
+                statements = process_for_angular(statements);
+            }
+            statements = eliminate_spurious_blocks(statements);
+            if (compressor.option("dead_code")) {
+                statements = eliminate_dead_code(statements, compressor);
+            }
+            if (compressor.option("if_return")) {
+                statements = handle_if_return(statements, compressor);
+            }
+            if (compressor.option("sequences")) {
+                statements = sequencesize(statements, compressor);
+            }
+            if (compressor.option("join_vars")) {
+                statements = join_consecutive_vars(statements, compressor);
+            }
+        } while (CHANGED);
+
+        if (compressor.option("negate_iife")) {
+            negate_iifes(statements, compressor);
+        }
+
+        return statements;
+
+        function process_for_angular(statements) {
+            function make_injector(func, name) {
+                return make_node(AST_SimpleStatement, func, {
+                    body: make_node(AST_Assign, func, {
+                        operator: "=",
+                        left: make_node(AST_Dot, name, {
+                            expression: make_node(AST_SymbolRef, name, name),
+                            property: "$inject"
+                        }),
+                        right: make_node(AST_Array, func, {
+                            elements: func.argnames.map(function(sym){
+                                return make_node(AST_String, sym, { value: sym.name });
+                            })
+                        })
+                    })
+                });
+            }
+            return statements.reduce(function(a, stat){
+                a.push(stat);
+                var token = stat.start;
+                var comments = token.comments_before;
+                if (comments && comments.length > 0) {
+                    var last = comments.pop();
+                    if (/@ngInject/.test(last.value)) {
+                        // case 1: defun
+                        if (stat instanceof AST_Defun) {
+                            a.push(make_injector(stat, stat.name));
                         }
-                    } else {
-                        a.push(stat);
+                        else if (stat instanceof AST_Definitions) {
+                            stat.definitions.forEach(function(def){
+                                if (def.value && def.value instanceof AST_Lambda) {
+                                    a.push(make_injector(def.value, def.name));
+                                }
+                            });
+                        }
+                        else {
+                            compressor.warn("Unknown statement marked with @ngInject [{file}:{line},{col}]", token);
+                        }
                     }
-                    return a;
-                }, []);
-            }
-            function handle_if_return(statements, compressor) {
-                var self = compressor.self();
-                var in_lambda = self instanceof AST_Lambda;
-                var ret = [];
-                loop: for (var i = statements.length; --i >= 0; ) {
-                    var stat = statements[i];
-                    switch (true) {
-                      case in_lambda && stat instanceof AST_Return && !stat.value && ret.length == 0:
-                        CHANGED = true;
-                        continue loop;
+                }
+                return a;
+            }, []);
+        }
 
-                      case stat instanceof AST_If:
-                        if (stat.body instanceof AST_Return) {
-                            if ((in_lambda && ret.length == 0 || ret[0] instanceof AST_Return && !ret[0].value) && !stat.body.value && !stat.alternative) {
-                                CHANGED = true;
-                                var cond = make_node(AST_SimpleStatement, stat.condition, {
-                                    body: stat.condition
-                                });
-                                ret.unshift(cond);
-                                continue loop;
-                            }
-                            if (ret[0] instanceof AST_Return && stat.body.value && ret[0].value && !stat.alternative) {
-                                CHANGED = true;
-                                stat = stat.clone();
-                                stat.alternative = ret[0];
-                                ret[0] = stat.transform(compressor);
-                                continue loop;
-                            }
-                            if ((ret.length == 0 || ret[0] instanceof AST_Return) && stat.body.value && !stat.alternative && in_lambda) {
-                                CHANGED = true;
-                                stat = stat.clone();
-                                stat.alternative = ret[0] || make_node(AST_Return, stat, {
-                                    value: make_node(AST_Undefined, stat)
-                                });
-                                ret[0] = stat.transform(compressor);
-                                continue loop;
-                            }
-                            if (!stat.body.value && in_lambda) {
-                                CHANGED = true;
-                                stat = stat.clone();
-                                stat.condition = stat.condition.negate(compressor);
-                                stat.body = make_node(AST_BlockStatement, stat, {
-                                    body: as_statement_array(stat.alternative).concat(ret)
-                                });
-                                stat.alternative = null;
-                                ret = [ stat.transform(compressor) ];
-                                continue loop;
-                            }
-                            if (ret.length == 1 && in_lambda && ret[0] instanceof AST_SimpleStatement && (!stat.alternative || stat.alternative instanceof AST_SimpleStatement)) {
-                                CHANGED = true;
-                                ret.push(make_node(AST_Return, ret[0], {
-                                    value: make_node(AST_Undefined, ret[0])
-                                }).transform(compressor));
-                                ret = as_statement_array(stat.alternative).concat(ret);
-                                ret.unshift(stat);
-                                continue loop;
-                            }
-                        }
-                        var ab = aborts(stat.body);
-                        var lct = ab instanceof AST_LoopControl ? compressor.loopcontrol_target(ab.label) : null;
-                        if (ab && (ab instanceof AST_Return && !ab.value && in_lambda || ab instanceof AST_Continue && self === loop_body(lct) || ab instanceof AST_Break && lct instanceof AST_BlockStatement && self === lct)) {
-                            if (ab.label) {
-                                remove(ab.label.thedef.references, ab.label);
-                            }
+        function eliminate_spurious_blocks(statements) {
+            var seen_dirs = [];
+            return statements.reduce(function(a, stat){
+                if (stat instanceof AST_BlockStatement) {
+                    CHANGED = true;
+                    a.push.apply(a, eliminate_spurious_blocks(stat.body));
+                } else if (stat instanceof AST_EmptyStatement) {
+                    CHANGED = true;
+                } else if (stat instanceof AST_Directive) {
+                    if (seen_dirs.indexOf(stat.value) < 0) {
+                        a.push(stat);
+                        seen_dirs.push(stat.value);
+                    } else {
+                        CHANGED = true;
+                    }
+                } else {
+                    a.push(stat);
+                }
+                return a;
+            }, []);
+        };
+
+        function handle_if_return(statements, compressor) {
+            var self = compressor.self();
+            var in_lambda = self instanceof AST_Lambda;
+            var ret = [];
+            loop: for (var i = statements.length; --i >= 0;) {
+                var stat = statements[i];
+                switch (true) {
+                  case (in_lambda && stat instanceof AST_Return && !stat.value && ret.length == 0):
+                    CHANGED = true;
+                    // note, ret.length is probably always zero
+                    // because we drop unreachable code before this
+                    // step.  nevertheless, it's good to check.
+                    continue loop;
+                  case stat instanceof AST_If:
+                    if (stat.body instanceof AST_Return) {
+                        //---
+                        // pretty silly case, but:
+                        // if (foo()) return; return; ==> foo(); return;
+                        if (((in_lambda && ret.length == 0)
+                             || (ret[0] instanceof AST_Return && !ret[0].value))
+                            && !stat.body.value && !stat.alternative) {
                             CHANGED = true;
-                            var body = as_statement_array(stat.body).slice(0, -1);
+                            var cond = make_node(AST_SimpleStatement, stat.condition, {
+                                body: stat.condition
+                            });
+                            ret.unshift(cond);
+                            continue loop;
+                        }
+                        //---
+                        // if (foo()) return x; return y; ==> return foo() ? x : y;
+                        if (ret[0] instanceof AST_Return && stat.body.value && ret[0].value && !stat.alternative) {
+                            CHANGED = true;
+                            stat = stat.clone();
+                            stat.alternative = ret[0];
+                            ret[0] = stat.transform(compressor);
+                            continue loop;
+                        }
+                        //---
+                        // if (foo()) return x; [ return ; ] ==> return foo() ? x : undefined;
+                        if ((ret.length == 0 || ret[0] instanceof AST_Return) && stat.body.value && !stat.alternative && in_lambda) {
+                            CHANGED = true;
+                            stat = stat.clone();
+                            stat.alternative = ret[0] || make_node(AST_Return, stat, {
+                                value: make_node(AST_Undefined, stat)
+                            });
+                            ret[0] = stat.transform(compressor);
+                            continue loop;
+                        }
+                        //---
+                        // if (foo()) return; [ else x... ]; y... ==> if (!foo()) { x...; y... }
+                        if (!stat.body.value && in_lambda) {
+                            CHANGED = true;
                             stat = stat.clone();
                             stat.condition = stat.condition.negate(compressor);
                             stat.body = make_node(AST_BlockStatement, stat, {
-                                body: ret
+                                body: as_statement_array(stat.alternative).concat(ret)
                             });
-                            stat.alternative = make_node(AST_BlockStatement, stat, {
-                                body: body
-                            });
+                            stat.alternative = null;
                             ret = [ stat.transform(compressor) ];
                             continue loop;
                         }
-                        var ab = aborts(stat.alternative);
-                        var lct = ab instanceof AST_LoopControl ? compressor.loopcontrol_target(ab.label) : null;
-                        if (ab && (ab instanceof AST_Return && !ab.value && in_lambda || ab instanceof AST_Continue && self === loop_body(lct) || ab instanceof AST_Break && lct instanceof AST_BlockStatement && self === lct)) {
-                            if (ab.label) {
-                                remove(ab.label.thedef.references, ab.label);
-                            }
+                        //---
+                        if (ret.length == 1 && in_lambda && ret[0] instanceof AST_SimpleStatement
+                            && (!stat.alternative || stat.alternative instanceof AST_SimpleStatement)) {
                             CHANGED = true;
-                            stat = stat.clone();
-                            stat.body = make_node(AST_BlockStatement, stat.body, {
-                                body: as_statement_array(stat.body).concat(ret)
-                            });
-                            stat.alternative = make_node(AST_BlockStatement, stat.alternative, {
-                                body: as_statement_array(stat.alternative).slice(0, -1)
-                            });
-                            ret = [ stat.transform(compressor) ];
+                            ret.push(make_node(AST_Return, ret[0], {
+                                value: make_node(AST_Undefined, ret[0])
+                            }).transform(compressor));
+                            ret = as_statement_array(stat.alternative).concat(ret);
+                            ret.unshift(stat);
                             continue loop;
                         }
-                        ret.unshift(stat);
-                        break;
-
-                      default:
-                        ret.unshift(stat);
-                        break;
                     }
+
+                    var ab = aborts(stat.body);
+                    var lct = ab instanceof AST_LoopControl ? compressor.loopcontrol_target(ab.label) : null;
+                    if (ab && ((ab instanceof AST_Return && !ab.value && in_lambda)
+                               || (ab instanceof AST_Continue && self === loop_body(lct))
+                               || (ab instanceof AST_Break && lct instanceof AST_BlockStatement && self === lct))) {
+                        if (ab.label) {
+                            remove(ab.label.thedef.references, ab);
+                        }
+                        CHANGED = true;
+                        var body = as_statement_array(stat.body).slice(0, -1);
+                        stat = stat.clone();
+                        stat.condition = stat.condition.negate(compressor);
+                        stat.body = make_node(AST_BlockStatement, stat, {
+                            body: ret
+                        });
+                        stat.alternative = make_node(AST_BlockStatement, stat, {
+                            body: body
+                        });
+                        ret = [ stat.transform(compressor) ];
+                        continue loop;
+                    }
+
+                    var ab = aborts(stat.alternative);
+                    var lct = ab instanceof AST_LoopControl ? compressor.loopcontrol_target(ab.label) : null;
+                    if (ab && ((ab instanceof AST_Return && !ab.value && in_lambda)
+                               || (ab instanceof AST_Continue && self === loop_body(lct))
+                               || (ab instanceof AST_Break && lct instanceof AST_BlockStatement && self === lct))) {
+                        if (ab.label) {
+                            remove(ab.label.thedef.references, ab);
+                        }
+                        CHANGED = true;
+                        stat = stat.clone();
+                        stat.body = make_node(AST_BlockStatement, stat.body, {
+                            body: as_statement_array(stat.body).concat(ret)
+                        });
+                        stat.alternative = make_node(AST_BlockStatement, stat.alternative, {
+                            body: as_statement_array(stat.alternative).slice(0, -1)
+                        });
+                        ret = [ stat.transform(compressor) ];
+                        continue loop;
+                    }
+
+                    ret.unshift(stat);
+                    break;
+                  default:
+                    ret.unshift(stat);
+                    break;
                 }
-                return ret;
             }
-            function eliminate_dead_code(statements, compressor) {
-                var has_quit = false;
-                var orig = statements.length;
-                var self = compressor.self();
-                statements = statements.reduce(function(a, stat) {
-                    if (has_quit) {
-                        extract_declarations_from_unreachable_code(compressor, stat, a);
-                    } else {
-                        if (stat instanceof AST_LoopControl) {
-                            var lct = compressor.loopcontrol_target(stat.label);
-                            if (stat instanceof AST_Break && lct instanceof AST_BlockStatement && loop_body(lct) === self || stat instanceof AST_Continue && loop_body(lct) === self) {
-                                if (stat.label) {
-                                    remove(stat.label.thedef.references, stat.label);
-                                }
-                            } else {
-                                a.push(stat);
+            return ret;
+        };
+
+        function eliminate_dead_code(statements, compressor) {
+            var has_quit = false;
+            var orig = statements.length;
+            var self = compressor.self();
+            statements = statements.reduce(function(a, stat){
+                if (has_quit) {
+                    extract_declarations_from_unreachable_code(compressor, stat, a);
+                } else {
+                    if (stat instanceof AST_LoopControl) {
+                        var lct = compressor.loopcontrol_target(stat.label);
+                        if ((stat instanceof AST_Break
+                             && lct instanceof AST_BlockStatement
+                             && loop_body(lct) === self) || (stat instanceof AST_Continue
+                                                             && loop_body(lct) === self)) {
+                            if (stat.label) {
+                                remove(stat.label.thedef.references, stat);
                             }
                         } else {
                             a.push(stat);
                         }
-                        if (aborts(stat)) has_quit = true;
-                    }
-                    return a;
-                }, []);
-                CHANGED = statements.length != orig;
-                return statements;
-            }
-            function sequencesize(statements, compressor) {
-                if (statements.length < 2) return statements;
-                var seq = [], ret = [];
-                function push_seq() {
-                    seq = AST_Seq.from_array(seq);
-                    if (seq) ret.push(make_node(AST_SimpleStatement, seq, {
-                        body: seq
-                    }));
-                    seq = [];
-                }
-                statements.forEach(function(stat) {
-                    if (stat instanceof AST_SimpleStatement) seq.push(stat.body); else push_seq(), ret.push(stat);
-                });
-                push_seq();
-                ret = sequencesize_2(ret, compressor);
-                CHANGED = ret.length != statements.length;
-                return ret;
-            }
-            function sequencesize_2(statements, compressor) {
-                function cons_seq(right) {
-                    ret.pop();
-                    var left = prev.body;
-                    if (left instanceof AST_Seq) {
-                        left.add(right);
                     } else {
-                        left = AST_Seq.cons(left, right);
+                        a.push(stat);
                     }
-                    return left.transform(compressor);
+                    if (aborts(stat)) has_quit = true;
                 }
-                var ret = [], prev = null;
-                statements.forEach(function(stat) {
-                    if (prev) {
-                        if (stat instanceof AST_For) {
-                            var opera = {};
-                            try {
-                                prev.body.walk(new TreeWalker(function(node) {
-                                    if (node instanceof AST_Binary && node.operator == "in") throw opera;
-                                }));
-                                if (stat.init && !(stat.init instanceof AST_Definitions)) {
-                                    stat.init = cons_seq(stat.init);
-                                } else if (!stat.init) {
-                                    stat.init = prev.body;
-                                    ret.pop();
-                                }
-                            } catch (ex) {
-                                if (ex !== opera) throw ex;
+                return a;
+            }, []);
+            CHANGED = statements.length != orig;
+            return statements;
+        };
+
+        function sequencesize(statements, compressor) {
+            if (statements.length < 2) return statements;
+            var seq = [], ret = [];
+            function push_seq() {
+                seq = AST_Seq.from_array(seq);
+                if (seq) ret.push(make_node(AST_SimpleStatement, seq, {
+                    body: seq
+                }));
+                seq = [];
+            };
+            statements.forEach(function(stat){
+                if (stat instanceof AST_SimpleStatement) seq.push(stat.body);
+                else push_seq(), ret.push(stat);
+            });
+            push_seq();
+            ret = sequencesize_2(ret, compressor);
+            CHANGED = ret.length != statements.length;
+            return ret;
+        };
+
+        function sequencesize_2(statements, compressor) {
+            function cons_seq(right) {
+                ret.pop();
+                var left = prev.body;
+                if (left instanceof AST_Seq) {
+                    left.add(right);
+                } else {
+                    left = AST_Seq.cons(left, right);
+                }
+                return left.transform(compressor);
+            };
+            var ret = [], prev = null;
+            statements.forEach(function(stat){
+                if (prev) {
+                    if (stat instanceof AST_For) {
+                        var opera = {};
+                        try {
+                            prev.body.walk(new TreeWalker(function(node){
+                                if (node instanceof AST_Binary && node.operator == "in")
+                                    throw opera;
+                            }));
+                            if (stat.init && !(stat.init instanceof AST_Definitions)) {
+                                stat.init = cons_seq(stat.init);
                             }
-                        } else if (stat instanceof AST_If) {
-                            stat.condition = cons_seq(stat.condition);
-                        } else if (stat instanceof AST_With) {
-                            stat.expression = cons_seq(stat.expression);
-                        } else if (stat instanceof AST_Exit && stat.value) {
-                            stat.value = cons_seq(stat.value);
-                        } else if (stat instanceof AST_Exit) {
-                            stat.value = cons_seq(make_node(AST_Undefined, stat));
-                        } else if (stat instanceof AST_Switch) {
-                            stat.expression = cons_seq(stat.expression);
+                            else if (!stat.init) {
+                                stat.init = prev.body;
+                                ret.pop();
+                            }
+                        } catch(ex) {
+                            if (ex !== opera) throw ex;
                         }
                     }
-                    ret.push(stat);
-                    prev = stat instanceof AST_SimpleStatement ? stat : null;
-                });
-                return ret;
-            }
-            function join_consecutive_vars(statements, compressor) {
-                var prev = null;
-                return statements.reduce(function(a, stat) {
-                    if (stat instanceof AST_Definitions && prev && prev.TYPE == stat.TYPE) {
-                        prev.definitions = prev.definitions.concat(stat.definitions);
-                        CHANGED = true;
-                    } else if (stat instanceof AST_For && prev instanceof AST_Definitions && (!stat.init || stat.init.TYPE == prev.TYPE)) {
-                        CHANGED = true;
-                        a.pop();
-                        if (stat.init) {
-                            stat.init.definitions = prev.definitions.concat(stat.init.definitions);
-                        } else {
-                            stat.init = prev;
-                        }
-                        a.push(stat);
-                        prev = stat;
+                    else if (stat instanceof AST_If) {
+                        stat.condition = cons_seq(stat.condition);
+                    }
+                    else if (stat instanceof AST_With) {
+                        stat.expression = cons_seq(stat.expression);
+                    }
+                    else if (stat instanceof AST_Exit && stat.value) {
+                        stat.value = cons_seq(stat.value);
+                    }
+                    else if (stat instanceof AST_Exit) {
+                        stat.value = cons_seq(make_node(AST_Undefined, stat));
+                    }
+                    else if (stat instanceof AST_Switch) {
+                        stat.expression = cons_seq(stat.expression);
+                    }
+                }
+                ret.push(stat);
+                prev = stat instanceof AST_SimpleStatement ? stat : null;
+            });
+            return ret;
+        };
+
+        function join_consecutive_vars(statements, compressor) {
+            var prev = null;
+            return statements.reduce(function(a, stat){
+                if (stat instanceof AST_Definitions && prev && prev.TYPE == stat.TYPE) {
+                    prev.definitions = prev.definitions.concat(stat.definitions);
+                    CHANGED = true;
+                }
+                else if (stat instanceof AST_For
+                         && prev instanceof AST_Definitions
+                         && (!stat.init || stat.init.TYPE == prev.TYPE)) {
+                    CHANGED = true;
+                    a.pop();
+                    if (stat.init) {
+                        stat.init.definitions = prev.definitions.concat(stat.init.definitions);
                     } else {
-                        prev = stat;
-                        a.push(stat);
+                        stat.init = prev;
                     }
-                    return a;
-                }, []);
+                    a.push(stat);
+                    prev = stat;
+                }
+                else {
+                    prev = stat;
+                    a.push(stat);
+                }
+                return a;
+            }, []);
+        };
+
+        function negate_iifes(statements, compressor) {
+            statements.forEach(function(stat){
+                if (stat instanceof AST_SimpleStatement) {
+                    stat.body = (function transform(thing) {
+                        return thing.transform(new TreeTransformer(function(node){
+                            if (node instanceof AST_Call && node.expression instanceof AST_Function) {
+                                return make_node(AST_UnaryPrefix, node, {
+                                    operator: "!",
+                                    expression: node
+                                });
+                            }
+                            else if (node instanceof AST_Call) {
+                                node.expression = transform(node.expression);
+                            }
+                            else if (node instanceof AST_Seq) {
+                                node.car = transform(node.car);
+                            }
+                            else if (node instanceof AST_Conditional) {
+                                var expr = transform(node.condition);
+                                if (expr !== node.condition) {
+                                    // it has been negated, reverse
+                                    node.condition = expr;
+                                    var tmp = node.consequent;
+                                    node.consequent = node.alternative;
+                                    node.alternative = tmp;
+                                }
+                            }
+                            return node;
+                        }));
+                    })(stat.body);
+                }
+            });
+        };
+
+    };
+
+    function extract_declarations_from_unreachable_code(compressor, stat, target) {
+        compressor.warn("Dropping unreachable code [{file}:{line},{col}]", stat.start);
+        stat.walk(new TreeWalker(function(node){
+            if (node instanceof AST_Definitions) {
+                compressor.warn("Declarations in unreachable code! [{file}:{line},{col}]", node.start);
+                node.remove_initializers();
+                target.push(node);
+                return true;
             }
-        }
-        function extract_declarations_from_unreachable_code(compressor, stat, target) {
-            compressor.warn("Dropping unreachable code [{file}:{line},{col}]", stat.start);
-            stat.walk(new TreeWalker(function(node) {
-                if (node instanceof AST_Definitions) {
-                    compressor.warn("Declarations in unreachable code! [{file}:{line},{col}]", node.start);
-                    node.remove_initializers();
-                    target.push(node);
-                    return true;
-                }
-                if (node instanceof AST_Defun) {
-                    target.push(node);
-                    return true;
-                }
-                if (node instanceof AST_Scope) {
-                    return true;
-                }
-            }));
-        }
-        (function(def) {
-            var unary_bool = [ "!", "delete" ];
-            var binary_bool = [ "in", "instanceof", "==", "!=", "===", "!==", "<", "<=", ">=", ">" ];
-            def(AST_Node, function() {
-                return false;
-            });
-            def(AST_UnaryPrefix, function() {
-                return member(this.operator, unary_bool);
-            });
-            def(AST_Binary, function() {
-                return member(this.operator, binary_bool) || (this.operator == "&&" || this.operator == "||") && this.left.is_boolean() && this.right.is_boolean();
-            });
-            def(AST_Conditional, function() {
-                return this.consequent.is_boolean() && this.alternative.is_boolean();
-            });
-            def(AST_Assign, function() {
-                return this.operator == "=" && this.right.is_boolean();
-            });
-            def(AST_Seq, function() {
-                return this.cdr.is_boolean();
-            });
-            def(AST_True, function() {
+            if (node instanceof AST_Defun) {
+                target.push(node);
                 return true;
-            });
-            def(AST_False, function() {
+            }
+            if (node instanceof AST_Scope) {
                 return true;
-            });
-        })(function(node, func) {
-            node.DEFMETHOD("is_boolean", func);
+            }
+        }));
+    };
+
+    /* -----[ boolean/negation helpers ]----- */
+
+    // methods to determine whether an expression has a boolean result type
+    (function (def){
+        var unary_bool = [ "!", "delete" ];
+        var binary_bool = [ "in", "instanceof", "==", "!=", "===", "!==", "<", "<=", ">=", ">" ];
+        def(AST_Node, function(){ return false });
+        def(AST_UnaryPrefix, function(){
+            return member(this.operator, unary_bool);
         });
-        (function(def) {
-            def(AST_Node, function() {
-                return false;
-            });
-            def(AST_String, function() {
-                return true;
-            });
-            def(AST_UnaryPrefix, function() {
-                return this.operator == "typeof";
-            });
-            def(AST_Binary, function() {
-                return this.operator == "+" && (this.left.is_string() || this.right.is_string());
-            });
-            def(AST_Assign, function() {
-                return this.operator == "=" && this.right.is_string();
-            });
-        })(function(node, func) {
-            node.DEFMETHOD("is_string", func);
+        def(AST_Binary, function(){
+            return member(this.operator, binary_bool) ||
+                ( (this.operator == "&&" || this.operator == "||") &&
+                  this.left.is_boolean() && this.right.is_boolean() );
         });
-        function best_of(ast1, ast2) {
-            return ast1.print_to_string().length > ast2.print_to_string().length ? ast2 : ast1;
-        }
-        (function(def) {
-            AST_Node.DEFMETHOD("evaluate", function(compressor) {
-                if (!compressor.option("evaluate")) return [ this ];
-                try {
-                    var val = this._eval(), ast = make_node_from_constant(compressor, val, this);
-                    return [ best_of(ast, this), val ];
-                } catch (ex) {
-                    if (ex !== def) throw ex;
-                    return [ this ];
-                }
-            });
-            def(AST_Statement, function() {
-                throw new Error(string_template("Cannot evaluate a statement [{file}:{line},{col}]", this.start));
-            });
-            def(AST_Function, function() {
+        def(AST_Conditional, function(){
+            return this.consequent.is_boolean() && this.alternative.is_boolean();
+        });
+        def(AST_Assign, function(){
+            return this.operator == "=" && this.right.is_boolean();
+        });
+        def(AST_Seq, function(){
+            return this.cdr.is_boolean();
+        });
+        def(AST_True, function(){ return true });
+        def(AST_False, function(){ return true });
+    })(function(node, func){
+        node.DEFMETHOD("is_boolean", func);
+    });
+
+    // methods to determine if an expression has a string result type
+    (function (def){
+        def(AST_Node, function(){ return false });
+        def(AST_String, function(){ return true });
+        def(AST_UnaryPrefix, function(){
+            return this.operator == "typeof";
+        });
+        def(AST_Binary, function(compressor){
+            return this.operator == "+" &&
+                (this.left.is_string(compressor) || this.right.is_string(compressor));
+        });
+        def(AST_Assign, function(compressor){
+            return (this.operator == "=" || this.operator == "+=") && this.right.is_string(compressor);
+        });
+        def(AST_Seq, function(compressor){
+            return this.cdr.is_string(compressor);
+        });
+        def(AST_Conditional, function(compressor){
+            return this.consequent.is_string(compressor) && this.alternative.is_string(compressor);
+        });
+        def(AST_Call, function(compressor){
+            return compressor.option("unsafe")
+                && this.expression instanceof AST_SymbolRef
+                && this.expression.name == "String"
+                && this.expression.undeclared();
+        });
+    })(function(node, func){
+        node.DEFMETHOD("is_string", func);
+    });
+
+    function best_of(ast1, ast2) {
+        return ast1.print_to_string().length >
+            ast2.print_to_string().length
+            ? ast2 : ast1;
+    };
+
+    // methods to evaluate a constant expression
+    (function (def){
+        // The evaluate method returns an array with one or two
+        // elements.  If the node has been successfully reduced to a
+        // constant, then the second element tells us the value;
+        // otherwise the second element is missing.  The first element
+        // of the array is always an AST_Node descendant; if
+        // evaluation was successful it's a node that represents the
+        // constant; otherwise it's the original or a replacement node.
+        AST_Node.DEFMETHOD("evaluate", function(compressor){
+            if (!compressor.option("evaluate")) return [ this ];
+            try {
+                var val = this._eval(compressor);
+                return [ best_of(make_node_from_constant(compressor, val, this), this), val ];
+            } catch(ex) {
+                if (ex !== def) throw ex;
                 return [ this ];
-            });
-            function ev(node) {
-                return node._eval();
             }
-            def(AST_Node, function() {
-                throw def;
-            });
-            def(AST_Constant, function() {
-                return this.getValue();
-            });
-            def(AST_UnaryPrefix, function() {
-                var e = this.expression;
-                switch (this.operator) {
-                  case "!":
-                    return !ev(e);
-
-                  case "typeof":
-                    return typeof ev(e);
-
-                  case "void":
-                    return void ev(e);
-
-                  case "~":
-                    return ~ev(e);
-
-                  case "-":
-                    return -ev(e);
-
-                  case "+":
-                    return +ev(e);
-                }
-                throw def;
-            });
-            def(AST_Binary, function() {
-                var left = this.left, right = this.right;
-                switch (this.operator) {
-                  case "&&":
-                    return ev(left) && ev(right);
-
-                  case "||":
-                    return ev(left) || ev(right);
-
-                  case "|":
-                    return ev(left) | ev(right);
-
-                  case "&":
-                    return ev(left) & ev(right);
-
-                  case "^":
-                    return ev(left) ^ ev(right);
-
-                  case "+":
-                    return ev(left) + ev(right);
-
-                  case "*":
-                    return ev(left) * ev(right);
-
-                  case "/":
-                    return ev(left) / ev(right);
-
-                  case "%":
-                    return ev(left) % ev(right);
-
-                  case "-":
-                    return ev(left) - ev(right);
-
-                  case "<<":
-                    return ev(left) << ev(right);
-
-                  case ">>":
-                    return ev(left) >> ev(right);
-
-                  case ">>>":
-                    return ev(left) >>> ev(right);
-
-                  case "==":
-                    return ev(left) == ev(right);
-
-                  case "===":
-                    return ev(left) === ev(right);
-
-                  case "!=":
-                    return ev(left) != ev(right);
-
-                  case "!==":
-                    return ev(left) !== ev(right);
-
-                  case "<":
-                    return ev(left) < ev(right);
-
-                  case "<=":
-                    return ev(left) <= ev(right);
-
-                  case ">":
-                    return ev(left) > ev(right);
-
-                  case ">=":
-                    return ev(left) >= ev(right);
-
-                  case "in":
-                    return ev(left) in ev(right);
-
-                  case "instanceof":
-                    return ev(left) instanceof ev(right);
-                }
-                throw def;
-            });
-            def(AST_Conditional, function() {
-                return ev(this.condition) ? ev(this.consequent) : ev(this.alternative);
-            });
-            def(AST_SymbolRef, function() {
-                var d = this.definition();
-                if (d && d.constant) {
-                    var orig = d.orig[0];
-                    if (orig) orig = orig.init[0];
-                    orig = orig && orig.value;
-                    if (orig) return ev(orig);
-                }
-                throw def;
-            });
-        })(function(node, func) {
-            node.DEFMETHOD("_eval", func);
         });
-        (function(def) {
-            function basic_negation(exp) {
-                return make_node(AST_UnaryPrefix, exp, {
-                    operator: "!",
-                    expression: exp
-                });
+        def(AST_Statement, function(){
+            throw new Error(string_template("Cannot evaluate a statement [{file}:{line},{col}]", this.start));
+        });
+        def(AST_Function, function(){
+            // XXX: AST_Function inherits from AST_Scope, which itself
+            // inherits from AST_Statement; however, an AST_Function
+            // isn't really a statement.  This could byte in other
+            // places too. :-( Wish JS had multiple inheritance.
+            throw def;
+        });
+        function ev(node, compressor) {
+            if (!compressor) throw new Error("Compressor must be passed");
+
+            return node._eval(compressor);
+        };
+        def(AST_Node, function(){
+            throw def;          // not constant
+        });
+        def(AST_Constant, function(){
+            return this.getValue();
+        });
+        def(AST_UnaryPrefix, function(compressor){
+            var e = this.expression;
+            switch (this.operator) {
+              case "!": return !ev(e, compressor);
+              case "typeof":
+                // Function would be evaluated to an array and so typeof would
+                // incorrectly return 'object'. Hence making is a special case.
+                if (e instanceof AST_Function) return typeof function(){};
+
+                e = ev(e, compressor);
+
+                // typeof <RegExp> returns "object" or "function" on different platforms
+                // so cannot evaluate reliably
+                if (e instanceof RegExp) throw def;
+
+                return typeof e;
+              case "void": return void ev(e, compressor);
+              case "~": return ~ev(e, compressor);
+              case "-":
+                e = ev(e, compressor);
+                if (e === 0) throw def;
+                return -e;
+              case "+": return +ev(e, compressor);
             }
-            def(AST_Node, function() {
-                return basic_negation(this);
-            });
-            def(AST_Statement, function() {
-                throw new Error("Cannot negate a statement");
-            });
-            def(AST_Function, function() {
-                return basic_negation(this);
-            });
-            def(AST_UnaryPrefix, function() {
-                if (this.operator == "!") return this.expression;
-                return basic_negation(this);
-            });
-            def(AST_Seq, function(compressor) {
-                var self = this.clone();
-                self.cdr = self.cdr.negate(compressor);
-                return self;
-            });
-            def(AST_Conditional, function(compressor) {
-                var self = this.clone();
-                self.consequent = self.consequent.negate(compressor);
-                self.alternative = self.alternative.negate(compressor);
-                return best_of(basic_negation(this), self);
-            });
-            def(AST_Binary, function(compressor) {
-                var self = this.clone(), op = this.operator;
-                if (compressor.option("unsafe_comps")) {
-                    switch (op) {
-                      case "<=":
-                        self.operator = ">";
-                        return self;
+            throw def;
+        });
+        def(AST_Binary, function(c){
+            var left = this.left, right = this.right;
+            switch (this.operator) {
+              case "&&"         : return ev(left, c) &&         ev(right, c);
+              case "||"         : return ev(left, c) ||         ev(right, c);
+              case "|"          : return ev(left, c) |          ev(right, c);
+              case "&"          : return ev(left, c) &          ev(right, c);
+              case "^"          : return ev(left, c) ^          ev(right, c);
+              case "+"          : return ev(left, c) +          ev(right, c);
+              case "*"          : return ev(left, c) *          ev(right, c);
+              case "/"          : return ev(left, c) /          ev(right, c);
+              case "%"          : return ev(left, c) %          ev(right, c);
+              case "-"          : return ev(left, c) -          ev(right, c);
+              case "<<"         : return ev(left, c) <<         ev(right, c);
+              case ">>"         : return ev(left, c) >>         ev(right, c);
+              case ">>>"        : return ev(left, c) >>>        ev(right, c);
+              case "=="         : return ev(left, c) ==         ev(right, c);
+              case "==="        : return ev(left, c) ===        ev(right, c);
+              case "!="         : return ev(left, c) !=         ev(right, c);
+              case "!=="        : return ev(left, c) !==        ev(right, c);
+              case "<"          : return ev(left, c) <          ev(right, c);
+              case "<="         : return ev(left, c) <=         ev(right, c);
+              case ">"          : return ev(left, c) >          ev(right, c);
+              case ">="         : return ev(left, c) >=         ev(right, c);
+              case "in"         : return ev(left, c) in         ev(right, c);
+              case "instanceof" : return ev(left, c) instanceof ev(right, c);
+            }
+            throw def;
+        });
+        def(AST_Conditional, function(compressor){
+            return ev(this.condition, compressor)
+                ? ev(this.consequent, compressor)
+                : ev(this.alternative, compressor);
+        });
+        def(AST_SymbolRef, function(compressor){
+            var d = this.definition();
+            if (d && d.constant && d.init) return ev(d.init, compressor);
+            throw def;
+        });
+    })(function(node, func){
+        node.DEFMETHOD("_eval", func);
+    });
 
-                      case "<":
-                        self.operator = ">=";
-                        return self;
-
-                      case ">=":
-                        self.operator = "<";
-                        return self;
-
-                      case ">":
-                        self.operator = "<=";
-                        return self;
-                    }
-                }
+    // method to negate an expression
+    (function(def){
+        function basic_negation(exp) {
+            return make_node(AST_UnaryPrefix, exp, {
+                operator: "!",
+                expression: exp
+            });
+        };
+        def(AST_Node, function(){
+            return basic_negation(this);
+        });
+        def(AST_Statement, function(){
+            throw new Error("Cannot negate a statement");
+        });
+        def(AST_Function, function(){
+            return basic_negation(this);
+        });
+        def(AST_UnaryPrefix, function(){
+            if (this.operator == "!")
+                return this.expression;
+            return basic_negation(this);
+        });
+        def(AST_Seq, function(compressor){
+            var self = this.clone();
+            self.cdr = self.cdr.negate(compressor);
+            return self;
+        });
+        def(AST_Conditional, function(compressor){
+            var self = this.clone();
+            self.consequent = self.consequent.negate(compressor);
+            self.alternative = self.alternative.negate(compressor);
+            return best_of(basic_negation(this), self);
+        });
+        def(AST_Binary, function(compressor){
+            var self = this.clone(), op = this.operator;
+            if (compressor.option("unsafe_comps")) {
                 switch (op) {
-                  case "==":
-                    self.operator = "!=";
-                    return self;
-
-                  case "!=":
-                    self.operator = "==";
-                    return self;
-
-                  case "===":
-                    self.operator = "!==";
-                    return self;
-
-                  case "!==":
-                    self.operator = "===";
-                    return self;
-
-                  case "&&":
-                    self.operator = "||";
-                    self.left = self.left.negate(compressor);
-                    self.right = self.right.negate(compressor);
-                    return best_of(basic_negation(this), self);
-
-                  case "||":
-                    self.operator = "&&";
-                    self.left = self.left.negate(compressor);
-                    self.right = self.right.negate(compressor);
-                    return best_of(basic_negation(this), self);
+                  case "<=" : self.operator = ">"  ; return self;
+                  case "<"  : self.operator = ">=" ; return self;
+                  case ">=" : self.operator = "<"  ; return self;
+                  case ">"  : self.operator = "<=" ; return self;
                 }
-                return basic_negation(this);
-            });
-        })(function(node, func) {
-            node.DEFMETHOD("negate", function(compressor) {
-                return func.call(this, compressor);
-            });
+            }
+            switch (op) {
+              case "==" : self.operator = "!="; return self;
+              case "!=" : self.operator = "=="; return self;
+              case "===": self.operator = "!=="; return self;
+              case "!==": self.operator = "==="; return self;
+              case "&&":
+                self.operator = "||";
+                self.left = self.left.negate(compressor);
+                self.right = self.right.negate(compressor);
+                return best_of(basic_negation(this), self);
+              case "||":
+                self.operator = "&&";
+                self.left = self.left.negate(compressor);
+                self.right = self.right.negate(compressor);
+                return best_of(basic_negation(this), self);
+            }
+            return basic_negation(this);
         });
-        (function(def) {
-            def(AST_Node, function() {
-                return true;
-            });
-            def(AST_EmptyStatement, function() {
-                return false;
-            });
-            def(AST_Constant, function() {
-                return false;
-            });
-            def(AST_This, function() {
-                return false;
-            });
-            def(AST_Block, function() {
-                for (var i = this.body.length; --i >= 0; ) {
-                    if (this.body[i].has_side_effects()) return true;
-                }
-                return false;
-            });
-            def(AST_SimpleStatement, function() {
-                return this.body.has_side_effects();
-            });
-            def(AST_Defun, function() {
-                return true;
-            });
-            def(AST_Function, function() {
-                return false;
-            });
-            def(AST_Binary, function() {
-                return this.left.has_side_effects() || this.right.has_side_effects();
-            });
-            def(AST_Assign, function() {
-                return true;
-            });
-            def(AST_Conditional, function() {
-                return this.condition.has_side_effects() || this.consequent.has_side_effects() || this.alternative.has_side_effects();
-            });
-            def(AST_Unary, function() {
-                return this.operator == "delete" || this.operator == "++" || this.operator == "--" || this.expression.has_side_effects();
-            });
-            def(AST_SymbolRef, function() {
-                return false;
-            });
-            def(AST_Object, function() {
-                for (var i = this.properties.length; --i >= 0; ) if (this.properties[i].has_side_effects()) return true;
-                return false;
-            });
-            def(AST_ObjectProperty, function() {
-                return this.value.has_side_effects();
-            });
-            def(AST_Array, function() {
-                for (var i = this.elements.length; --i >= 0; ) if (this.elements[i].has_side_effects()) return true;
-                return false;
-            });
-            def(AST_PropAccess, function() {
-                return true;
-            });
-            def(AST_Seq, function() {
-                return this.car.has_side_effects() || this.cdr.has_side_effects();
-            });
-        })(function(node, func) {
-            node.DEFMETHOD("has_side_effects", func);
+    })(function(node, func){
+        node.DEFMETHOD("negate", function(compressor){
+            return func.call(this, compressor);
         });
-        function aborts(thing) {
-            return thing && thing.aborts();
+    });
+
+    // determine if expression has side effects
+    (function(def){
+        def(AST_Node, function(compressor){ return true });
+
+        def(AST_EmptyStatement, function(compressor){ return false });
+        def(AST_Constant, function(compressor){ return false });
+        def(AST_This, function(compressor){ return false });
+
+        def(AST_Call, function(compressor){
+            var pure = compressor.option("pure_funcs");
+            if (!pure) return true;
+            return pure.indexOf(this.expression.print_to_string()) < 0;
+        });
+
+        def(AST_Block, function(compressor){
+            for (var i = this.body.length; --i >= 0;) {
+                if (this.body[i].has_side_effects(compressor))
+                    return true;
+            }
+            return false;
+        });
+
+        def(AST_SimpleStatement, function(compressor){
+            return this.body.has_side_effects(compressor);
+        });
+        def(AST_Defun, function(compressor){ return true });
+        def(AST_Function, function(compressor){ return false });
+        def(AST_Binary, function(compressor){
+            return this.left.has_side_effects(compressor)
+                || this.right.has_side_effects(compressor);
+        });
+        def(AST_Assign, function(compressor){ return true });
+        def(AST_Conditional, function(compressor){
+            return this.condition.has_side_effects(compressor)
+                || this.consequent.has_side_effects(compressor)
+                || this.alternative.has_side_effects(compressor);
+        });
+        def(AST_Unary, function(compressor){
+            return this.operator == "delete"
+                || this.operator == "++"
+                || this.operator == "--"
+                || this.expression.has_side_effects(compressor);
+        });
+        def(AST_SymbolRef, function(compressor){ return false });
+        def(AST_Object, function(compressor){
+            for (var i = this.properties.length; --i >= 0;)
+                if (this.properties[i].has_side_effects(compressor))
+                    return true;
+            return false;
+        });
+        def(AST_ObjectProperty, function(compressor){
+            return this.value.has_side_effects(compressor);
+        });
+        def(AST_Array, function(compressor){
+            for (var i = this.elements.length; --i >= 0;)
+                if (this.elements[i].has_side_effects(compressor))
+                    return true;
+            return false;
+        });
+        def(AST_Dot, function(compressor){
+            if (!compressor.option("pure_getters")) return true;
+            return this.expression.has_side_effects(compressor);
+        });
+        def(AST_Sub, function(compressor){
+            if (!compressor.option("pure_getters")) return true;
+            return this.expression.has_side_effects(compressor)
+                || this.property.has_side_effects(compressor);
+        });
+        def(AST_PropAccess, function(compressor){
+            return !compressor.option("pure_getters");
+        });
+        def(AST_Seq, function(compressor){
+            return this.car.has_side_effects(compressor)
+                || this.cdr.has_side_effects(compressor);
+        });
+    })(function(node, func){
+        node.DEFMETHOD("has_side_effects", func);
+    });
+
+    // tell me if a statement aborts
+    function aborts(thing) {
+        return thing && thing.aborts();
+    };
+    (function(def){
+        def(AST_Statement, function(){ return null });
+        def(AST_Jump, function(){ return this });
+        function block_aborts(){
+            var n = this.body.length;
+            return n > 0 && aborts(this.body[n - 1]);
+        };
+        def(AST_BlockStatement, block_aborts);
+        def(AST_SwitchBranch, block_aborts);
+        def(AST_If, function(){
+            return this.alternative && aborts(this.body) && aborts(this.alternative);
+        });
+    })(function(node, func){
+        node.DEFMETHOD("aborts", func);
+    });
+
+    /* -----[ optimizers ]----- */
+
+    OPT(AST_Directive, function(self, compressor){
+        if (self.scope.has_directive(self.value) !== self.scope) {
+            return make_node(AST_EmptyStatement, self);
         }
-        (function(def) {
-            def(AST_Statement, function() {
-                return null;
-            });
-            def(AST_Jump, function() {
-                return this;
-            });
-            def(AST_BlockStatement, function() {
-                var n = this.body.length;
-                return n > 0 && aborts(this.body[n - 1]);
-            });
-            def(AST_If, function() {
-                return this.alternative && aborts(this.body) && aborts(this.alternative);
-            });
-        })(function(node, func) {
-            node.DEFMETHOD("aborts", func);
-        });
-        OPT(AST_Directive, function(self, compressor) {
-            if (self.scope.has_directive(self.value) !== self.scope) {
-                return make_node(AST_EmptyStatement, self);
-            }
-            return self;
-        });
-        OPT(AST_Debugger, function(self, compressor) {
-            if (compressor.option("drop_debugger")) return make_node(AST_EmptyStatement, self);
-            return self;
-        });
-        OPT(AST_LabeledStatement, function(self, compressor) {
-            if (self.body instanceof AST_Break && compressor.loopcontrol_target(self.body.label) === self.body) {
-                return make_node(AST_EmptyStatement, self);
-            }
-            return self.label.references.length == 0 ? self.body : self;
-        });
-        OPT(AST_Block, function(self, compressor) {
-            self.body = tighten_body(self.body, compressor);
-            return self;
-        });
-        OPT(AST_BlockStatement, function(self, compressor) {
-            self.body = tighten_body(self.body, compressor);
-            switch (self.body.length) {
-              case 1:
-                return self.body[0];
+        return self;
+    });
 
-              case 0:
-                return make_node(AST_EmptyStatement, self);
-            }
-            return self;
-        });
-        AST_Scope.DEFMETHOD("drop_unused", function(compressor) {
-            var self = this;
-            if (compressor.option("unused") && !(self instanceof AST_Toplevel) && !self.uses_eval) {
-                var in_use = [];
-                var scope = this;
-                var tw = new TreeWalker(function(node, descend) {
-                    if (node !== self) {
-                        if (node instanceof AST_Defun) {
-                            return true;
-                        }
-                        if (node instanceof AST_Definitions && scope === self) {
-                            node.definitions.forEach(function(def) {
-                                if (def.value && def.value.has_side_effects()) {
+    OPT(AST_Debugger, function(self, compressor){
+        if (compressor.option("drop_debugger"))
+            return make_node(AST_EmptyStatement, self);
+        return self;
+    });
+
+    OPT(AST_LabeledStatement, function(self, compressor){
+        if (self.body instanceof AST_Break
+            && compressor.loopcontrol_target(self.body.label) === self.body) {
+            return make_node(AST_EmptyStatement, self);
+        }
+        return self.label.references.length == 0 ? self.body : self;
+    });
+
+    OPT(AST_Block, function(self, compressor){
+        self.body = tighten_body(self.body, compressor);
+        return self;
+    });
+
+    OPT(AST_BlockStatement, function(self, compressor){
+        self.body = tighten_body(self.body, compressor);
+        switch (self.body.length) {
+          case 1: return self.body[0];
+          case 0: return make_node(AST_EmptyStatement, self);
+        }
+        return self;
+    });
+
+    AST_Scope.DEFMETHOD("drop_unused", function(compressor){
+        var self = this;
+        if (compressor.option("unused")
+            && !(self instanceof AST_Toplevel)
+            && !self.uses_eval
+           ) {
+            var in_use = [];
+            var initializations = new Dictionary();
+            // pass 1: find out which symbols are directly used in
+            // this scope (not in nested scopes).
+            var scope = this;
+            var tw = new TreeWalker(function(node, descend){
+                if (node !== self) {
+                    if (node instanceof AST_Defun) {
+                        initializations.add(node.name.name, node);
+                        return true; // don't go in nested scopes
+                    }
+                    if (node instanceof AST_Definitions && scope === self) {
+                        node.definitions.forEach(function(def){
+                            if (def.value) {
+                                initializations.add(def.name.name, def.value);
+                                if (def.value.has_side_effects(compressor)) {
                                     def.value.walk(tw);
                                 }
-                            });
-                            return true;
-                        }
-                        if (node instanceof AST_SymbolRef) {
-                            push_uniq(in_use, node.definition());
-                            return true;
-                        }
-                        if (node instanceof AST_Scope) {
-                            var save_scope = scope;
-                            scope = node;
-                            descend();
-                            scope = save_scope;
-                            return true;
-                        }
+                            }
+                        });
+                        return true;
                     }
-                });
-                self.walk(tw);
-                for (var i = 0; i < in_use.length; ++i) {
-                    in_use[i].orig.forEach(function(decl) {
-                        if (decl instanceof AST_SymbolDeclaration) {
-                            decl.init.forEach(function(init) {
-                                var tw = new TreeWalker(function(node) {
-                                    if (node instanceof AST_SymbolRef) {
-                                        push_uniq(in_use, node.definition());
-                                    }
-                                });
-                                init.walk(tw);
-                            });
-                        }
-                    });
+                    if (node instanceof AST_SymbolRef) {
+                        push_uniq(in_use, node.definition());
+                        return true;
+                    }
+                    if (node instanceof AST_Scope) {
+                        var save_scope = scope;
+                        scope = node;
+                        descend();
+                        scope = save_scope;
+                        return true;
+                    }
                 }
-                var tt = new TreeTransformer(function before(node, descend, in_list) {
-                    if (node instanceof AST_Lambda) {
-                        for (var a = node.argnames, i = a.length; --i >= 0; ) {
+            });
+            self.walk(tw);
+            // pass 2: for every used symbol we need to walk its
+            // initialization code to figure out if it uses other
+            // symbols (that may not be in_use).
+            for (var i = 0; i < in_use.length; ++i) {
+                in_use[i].orig.forEach(function(decl){
+                    // undeclared globals will be instanceof AST_SymbolRef
+                    var init = initializations.get(decl.name);
+                    if (init) init.forEach(function(init){
+                        var tw = new TreeWalker(function(node){
+                            if (node instanceof AST_SymbolRef) {
+                                push_uniq(in_use, node.definition());
+                            }
+                        });
+                        init.walk(tw);
+                    });
+                });
+            }
+            // pass 3: we should drop declarations not in_use
+            var tt = new TreeTransformer(
+                function before(node, descend, in_list) {
+                    if (node instanceof AST_Lambda && !(node instanceof AST_Accessor)) {
+                        for (var a = node.argnames, i = a.length; --i >= 0;) {
                             var sym = a[i];
                             if (sym.unreferenced()) {
                                 a.pop();
                                 compressor.warn("Dropping unused function argument {name} [{file}:{line},{col}]", {
-                                    name: sym.name,
-                                    file: sym.start.file,
-                                    line: sym.start.line,
-                                    col: sym.start.col
+                                    name : sym.name,
+                                    file : sym.start.file,
+                                    line : sym.start.line,
+                                    col  : sym.start.col
                                 });
-                            } else break;
+                            }
+                            else break;
                         }
                     }
                     if (node instanceof AST_Defun && node !== self) {
                         if (!member(node.name.definition(), in_use)) {
                             compressor.warn("Dropping unused function {name} [{file}:{line},{col}]", {
-                                name: node.name.name,
-                                file: node.name.start.file,
-                                line: node.name.start.line,
-                                col: node.name.start.col
+                                name : node.name.name,
+                                file : node.name.start.file,
+                                line : node.name.start.line,
+                                col  : node.name.start.col
                             });
                             return make_node(AST_EmptyStatement, node);
                         }
                         return node;
                     }
                     if (node instanceof AST_Definitions && !(tt.parent() instanceof AST_ForIn)) {
-                        var def = node.definitions.filter(function(def) {
+                        var def = node.definitions.filter(function(def){
                             if (member(def.name.definition(), in_use)) return true;
                             var w = {
-                                name: def.name.name,
-                                file: def.name.start.file,
-                                line: def.name.start.line,
-                                col: def.name.start.col
+                                name : def.name.name,
+                                file : def.name.start.file,
+                                line : def.name.start.line,
+                                col  : def.name.start.col
                             };
-                            if (def.value && def.value.has_side_effects()) {
+                            if (def.value && def.value.has_side_effects(compressor)) {
                                 def._unused_side_effects = true;
                                 compressor.warn("Side effects in initialization of unused variable {name} [{file}:{line},{col}]", w);
                                 return true;
@@ -17918,13 +20944,17 @@ define('uglifyjs2', ['exports', 'source-map', 'logger'], function (exports, MOZ_
                             compressor.warn("Dropping unused variable {name} [{file}:{line},{col}]", w);
                             return false;
                         });
-                        def = mergeSort(def, function(a, b) {
+                        // place uninitialized names at the start
+                        def = mergeSort(def, function(a, b){
                             if (!a.value && b.value) return -1;
                             if (!b.value && a.value) return 1;
                             return 0;
                         });
+                        // for unused names whose initialization has
+                        // side effects, we can cascade the init. code
+                        // into the next one, or next statement.
                         var side_effects = [];
-                        for (var i = 0; i < def.length; ) {
+                        for (var i = 0; i < def.length;) {
                             var x = def[i];
                             if (x._unused_side_effects) {
                                 side_effects.push(x.value);
@@ -17960,37 +20990,53 @@ define('uglifyjs2', ['exports', 'source-map', 'logger'], function (exports, MOZ_
                         }
                         return node;
                     }
-                    if (node instanceof AST_For && node.init instanceof AST_BlockStatement) {
+                    if (node instanceof AST_For) {
                         descend(node, this);
-                        var body = node.init.body.slice(0, -1);
-                        node.init = node.init.body.slice(-1)[0].body;
-                        body.push(node);
-                        return in_list ? MAP.splice(body) : make_node(AST_BlockStatement, node, {
-                            body: body
-                        });
+
+                        if (node.init instanceof AST_BlockStatement) {
+                            // certain combination of unused name + side effect leads to:
+                            //    https://github.com/mishoo/UglifyJS2/issues/44
+                            // that's an invalid AST.
+                            // We fix it at this stage by moving the `var` outside the `for`.
+
+                            var body = node.init.body.slice(0, -1);
+                            node.init = node.init.body.slice(-1)[0].body;
+                            body.push(node);
+
+                            return in_list ? MAP.splice(body) : make_node(AST_BlockStatement, node, {
+                                body: body
+                            });
+                        }
                     }
-                    if (node instanceof AST_Scope && node !== self) return node;
-                });
-                self.transform(tt);
-            }
-        });
-        AST_Scope.DEFMETHOD("hoist_declarations", function(compressor) {
-            var hoist_funs = compressor.option("hoist_funs");
-            var hoist_vars = compressor.option("hoist_vars");
-            var self = this;
-            if (hoist_funs || hoist_vars) {
-                var dirs = [];
-                var hoisted = [];
-                var vars = new Dictionary(), vars_found = 0, var_decl = 0;
-                self.walk(new TreeWalker(function(node) {
-                    if (node instanceof AST_Scope && node !== self) return true;
-                    if (node instanceof AST_Var) {
-                        ++var_decl;
-                        return true;
-                    }
-                }));
-                hoist_vars = hoist_vars && var_decl > 1;
-                var tt = new TreeTransformer(function before(node) {
+                    if (node instanceof AST_Scope && node !== self)
+                        return node;
+                }
+            );
+            self.transform(tt);
+        }
+    });
+
+    AST_Scope.DEFMETHOD("hoist_declarations", function(compressor){
+        var hoist_funs = compressor.option("hoist_funs");
+        var hoist_vars = compressor.option("hoist_vars");
+        var self = this;
+        if (hoist_funs || hoist_vars) {
+            var dirs = [];
+            var hoisted = [];
+            var vars = new Dictionary(), vars_found = 0, var_decl = 0;
+            // let's count var_decl first, we seem to waste a lot of
+            // space if we hoist `var` when there's only one.
+            self.walk(new TreeWalker(function(node){
+                if (node instanceof AST_Scope && node !== self)
+                    return true;
+                if (node instanceof AST_Var) {
+                    ++var_decl;
+                    return true;
+                }
+            }));
+            hoist_vars = hoist_vars && var_decl > 1;
+            var tt = new TreeTransformer(
+                function before(node) {
                     if (node !== self) {
                         if (node instanceof AST_Directive) {
                             dirs.push(node);
@@ -18001,7 +21047,7 @@ define('uglifyjs2', ['exports', 'source-map', 'logger'], function (exports, MOZ_
                             return make_node(AST_EmptyStatement, node);
                         }
                         if (node instanceof AST_Var && hoist_vars) {
-                            node.definitions.forEach(function(def) {
+                            node.definitions.forEach(function(def){
                                 vars.set(def.name.name, def);
                                 ++vars_found;
                             });
@@ -18019,1114 +21065,1579 @@ define('uglifyjs2', ['exports', 'source-map', 'logger'], function (exports, MOZ_
                                 body: seq
                             });
                         }
-                        if (node instanceof AST_Scope) return node;
+                        if (node instanceof AST_Scope)
+                            return node; // to avoid descending in nested scopes
                     }
-                });
-                self = self.transform(tt);
-                if (vars_found > 0) hoisted.unshift(make_node(AST_Var, self, {
-                    definitions: vars.map(function(def) {
+                }
+            );
+            self = self.transform(tt);
+            if (vars_found > 0) {
+                // collect only vars which don't show up in self's arguments list
+                var defs = [];
+                vars.each(function(def, name){
+                    if (self instanceof AST_Lambda
+                        && find_if(function(x){ return x.name == def.name.name },
+                                   self.argnames)) {
+                        vars.del(name);
+                    } else {
                         def = def.clone();
                         def.value = null;
-                        return def;
-                    })
-                }));
-                self.body = dirs.concat(hoisted, self.body);
-            }
-            return self;
-        });
-        OPT(AST_SimpleStatement, function(self, compressor) {
-            if (compressor.option("side_effects")) {
-                if (!self.body.has_side_effects()) {
-                    compressor.warn("Dropping side-effect-free statement [{file}:{line},{col}]", self.start);
-                    return make_node(AST_EmptyStatement, self);
-                }
-            }
-            return self;
-        });
-        OPT(AST_DWLoop, function(self, compressor) {
-            var cond = self.condition.evaluate(compressor);
-            self.condition = cond[0];
-            if (!compressor.option("loops")) return self;
-            if (cond.length > 1) {
-                if (cond[1]) {
-                    return make_node(AST_For, self, {
-                        body: self.body
+                        defs.push(def);
+                        vars.set(name, def);
+                    }
+                });
+                if (defs.length > 0) {
+                    // try to merge in assignments
+                    for (var i = 0; i < self.body.length;) {
+                        if (self.body[i] instanceof AST_SimpleStatement) {
+                            var expr = self.body[i].body, sym, assign;
+                            if (expr instanceof AST_Assign
+                                && expr.operator == "="
+                                && (sym = expr.left) instanceof AST_Symbol
+                                && vars.has(sym.name))
+                            {
+                                var def = vars.get(sym.name);
+                                if (def.value) break;
+                                def.value = expr.right;
+                                remove(defs, def);
+                                defs.push(def);
+                                self.body.splice(i, 1);
+                                continue;
+                            }
+                            if (expr instanceof AST_Seq
+                                && (assign = expr.car) instanceof AST_Assign
+                                && assign.operator == "="
+                                && (sym = assign.left) instanceof AST_Symbol
+                                && vars.has(sym.name))
+                            {
+                                var def = vars.get(sym.name);
+                                if (def.value) break;
+                                def.value = assign.right;
+                                remove(defs, def);
+                                defs.push(def);
+                                self.body[i].body = expr.cdr;
+                                continue;
+                            }
+                        }
+                        if (self.body[i] instanceof AST_EmptyStatement) {
+                            self.body.splice(i, 1);
+                            continue;
+                        }
+                        if (self.body[i] instanceof AST_BlockStatement) {
+                            var tmp = [ i, 1 ].concat(self.body[i].body);
+                            self.body.splice.apply(self.body, tmp);
+                            continue;
+                        }
+                        break;
+                    }
+                    defs = make_node(AST_Var, self, {
+                        definitions: defs
                     });
-                } else if (self instanceof AST_While) {
-                    if (compressor.option("dead_code")) {
-                        var a = [];
-                        extract_declarations_from_unreachable_code(compressor, self.body, a);
-                        return make_node(AST_BlockStatement, self, {
-                            body: a
-                        });
-                    }
-                } else {
-                    return self.body;
-                }
+                    hoisted.push(defs);
+                };
             }
-            return self;
-        });
-        function if_break_in_loop(self, compressor) {
-            function drop_it(rest) {
-                rest = as_statement_array(rest);
-                if (self.body instanceof AST_BlockStatement) {
-                    self.body = self.body.clone();
-                    self.body.body = rest.concat(self.body.body.slice(1));
-                    self.body = self.body.transform(compressor);
-                } else {
-                    self.body = make_node(AST_BlockStatement, self.body, {
-                        body: rest
-                    }).transform(compressor);
-                }
-                if_break_in_loop(self, compressor);
+            self.body = dirs.concat(hoisted, self.body);
+        }
+        return self;
+    });
+
+    OPT(AST_SimpleStatement, function(self, compressor){
+        if (compressor.option("side_effects")) {
+            if (!self.body.has_side_effects(compressor)) {
+                compressor.warn("Dropping side-effect-free statement [{file}:{line},{col}]", self.start);
+                return make_node(AST_EmptyStatement, self);
             }
-            var first = self.body instanceof AST_BlockStatement ? self.body.body[0] : self.body;
-            if (first instanceof AST_If) {
-                if (first.body instanceof AST_Break && compressor.loopcontrol_target(first.body.label) === self) {
-                    if (self.condition) {
-                        self.condition = make_node(AST_Binary, self.condition, {
-                            left: self.condition,
-                            operator: "&&",
-                            right: first.condition.negate(compressor)
-                        });
-                    } else {
-                        self.condition = first.condition.negate(compressor);
-                    }
-                    drop_it(first.alternative);
-                } else if (first.alternative instanceof AST_Break && compressor.loopcontrol_target(first.alternative.label) === self) {
-                    if (self.condition) {
-                        self.condition = make_node(AST_Binary, self.condition, {
-                            left: self.condition,
-                            operator: "&&",
-                            right: first.condition
-                        });
-                    } else {
-                        self.condition = first.condition;
-                    }
-                    drop_it(first.body);
+        }
+        return self;
+    });
+
+    OPT(AST_DWLoop, function(self, compressor){
+        var cond = self.condition.evaluate(compressor);
+        self.condition = cond[0];
+        if (!compressor.option("loops")) return self;
+        if (cond.length > 1) {
+            if (cond[1]) {
+                return make_node(AST_For, self, {
+                    body: self.body
+                });
+            } else if (self instanceof AST_While) {
+                if (compressor.option("dead_code")) {
+                    var a = [];
+                    extract_declarations_from_unreachable_code(compressor, self.body, a);
+                    return make_node(AST_BlockStatement, self, { body: a });
                 }
             }
         }
-        OPT(AST_While, function(self, compressor) {
-            if (!compressor.option("loops")) return self;
-            self = AST_DWLoop.prototype.optimize.call(self, compressor);
-            if (self instanceof AST_While) {
-                if_break_in_loop(self, compressor);
-                self = make_node(AST_For, self, self).transform(compressor);
-            }
-            return self;
-        });
-        OPT(AST_For, function(self, compressor) {
-            var cond = self.condition;
-            if (cond) {
-                cond = cond.evaluate(compressor);
-                self.condition = cond[0];
-            }
-            if (!compressor.option("loops")) return self;
-            if (cond) {
-                if (cond.length > 1 && !cond[1]) {
-                    if (compressor.option("dead_code")) {
-                        var a = [];
-                        if (self.init instanceof AST_Statement) {
-                            a.push(self.init);
-                        } else if (self.init) {
-                            a.push(make_node(AST_SimpleStatement, self.init, {
-                                body: self.init
-                            }));
-                        }
-                        extract_declarations_from_unreachable_code(compressor, self.body, a);
-                        return make_node(AST_BlockStatement, self, {
-                            body: a
-                        });
-                    }
-                }
+        return self;
+    });
+
+    function if_break_in_loop(self, compressor) {
+        function drop_it(rest) {
+            rest = as_statement_array(rest);
+            if (self.body instanceof AST_BlockStatement) {
+                self.body = self.body.clone();
+                self.body.body = rest.concat(self.body.body.slice(1));
+                self.body = self.body.transform(compressor);
+            } else {
+                self.body = make_node(AST_BlockStatement, self.body, {
+                    body: rest
+                }).transform(compressor);
             }
             if_break_in_loop(self, compressor);
-            return self;
-        });
-        OPT(AST_If, function(self, compressor) {
-            if (!compressor.option("conditionals")) return self;
-            var cond = self.condition.evaluate(compressor);
-            self.condition = cond[0];
-            if (cond.length > 1) {
-                if (cond[1]) {
-                    compressor.warn("Condition always true [{file}:{line},{col}]", self.condition.start);
-                    if (compressor.option("dead_code")) {
-                        var a = [];
-                        if (self.alternative) {
-                            extract_declarations_from_unreachable_code(compressor, self.alternative, a);
-                        }
-                        a.push(self.body);
-                        return make_node(AST_BlockStatement, self, {
-                            body: a
-                        }).transform(compressor);
-                    }
-                } else {
-                    compressor.warn("Condition always false [{file}:{line},{col}]", self.condition.start);
-                    if (compressor.option("dead_code")) {
-                        var a = [];
-                        extract_declarations_from_unreachable_code(compressor, self.body, a);
-                        if (self.alternative) a.push(self.alternative);
-                        return make_node(AST_BlockStatement, self, {
-                            body: a
-                        }).transform(compressor);
-                    }
-                }
-            }
-            if (is_empty(self.alternative)) self.alternative = null;
-            var negated = self.condition.negate(compressor);
-            var negated_is_best = best_of(self.condition, negated) === negated;
-            if (self.alternative && negated_is_best) {
-                negated_is_best = false;
-                self.condition = negated;
-                var tmp = self.body;
-                self.body = self.alternative || make_node(AST_EmptyStatement);
-                self.alternative = tmp;
-            }
-            if (is_empty(self.body) && is_empty(self.alternative)) {
-                return make_node(AST_SimpleStatement, self.condition, {
-                    body: self.condition
-                }).transform(compressor);
-            }
-            if (self.body instanceof AST_SimpleStatement && self.alternative instanceof AST_SimpleStatement) {
-                return make_node(AST_SimpleStatement, self, {
-                    body: make_node(AST_Conditional, self, {
-                        condition: self.condition,
-                        consequent: self.body.body,
-                        alternative: self.alternative.body
-                    })
-                }).transform(compressor);
-            }
-            if (is_empty(self.alternative) && self.body instanceof AST_SimpleStatement) {
-                if (negated_is_best) return make_node(AST_SimpleStatement, self, {
-                    body: make_node(AST_Binary, self, {
-                        operator: "||",
-                        left: negated,
-                        right: self.body.body
-                    })
-                }).transform(compressor);
-                return make_node(AST_SimpleStatement, self, {
-                    body: make_node(AST_Binary, self, {
+        }
+        var first = self.body instanceof AST_BlockStatement ? self.body.body[0] : self.body;
+        if (first instanceof AST_If) {
+            if (first.body instanceof AST_Break
+                && compressor.loopcontrol_target(first.body.label) === self) {
+                if (self.condition) {
+                    self.condition = make_node(AST_Binary, self.condition, {
+                        left: self.condition,
                         operator: "&&",
+                        right: first.condition.negate(compressor),
+                    });
+                } else {
+                    self.condition = first.condition.negate(compressor);
+                }
+                drop_it(first.alternative);
+            }
+            else if (first.alternative instanceof AST_Break
+                     && compressor.loopcontrol_target(first.alternative.label) === self) {
+                if (self.condition) {
+                    self.condition = make_node(AST_Binary, self.condition, {
                         left: self.condition,
-                        right: self.body.body
-                    })
-                }).transform(compressor);
+                        operator: "&&",
+                        right: first.condition,
+                    });
+                } else {
+                    self.condition = first.condition;
+                }
+                drop_it(first.body);
             }
-            if (self.body instanceof AST_EmptyStatement && self.alternative && self.alternative instanceof AST_SimpleStatement) {
-                return make_node(AST_SimpleStatement, self, {
-                    body: make_node(AST_Binary, self, {
-                        operator: "||",
-                        left: self.condition,
-                        right: self.alternative.body
-                    })
-                }).transform(compressor);
-            }
-            if (self.body instanceof AST_Exit && self.alternative instanceof AST_Exit && self.body.TYPE == self.alternative.TYPE) {
-                return make_node(self.body.CTOR, self, {
-                    value: make_node(AST_Conditional, self, {
-                        condition: self.condition,
-                        consequent: self.body.value || make_node(AST_Undefined, self.body).optimize(compressor),
-                        alternative: self.alternative.value || make_node(AST_Undefined, self.alternative).optimize(compressor)
-                    })
-                }).transform(compressor);
-            }
-            if (self.body instanceof AST_If && !self.body.alternative && !self.alternative) {
-                self.condition = make_node(AST_Binary, self.condition, {
-                    operator: "&&",
-                    left: self.condition,
-                    right: self.body.condition
-                }).transform(compressor);
-                self.body = self.body.body;
-            }
-            if (aborts(self.body)) {
-                if (self.alternative) {
-                    var alt = self.alternative;
-                    self.alternative = null;
-                    return make_node(AST_BlockStatement, self, {
-                        body: [ self, alt ]
-                    }).transform(compressor);
+        }
+    };
+
+    OPT(AST_While, function(self, compressor) {
+        if (!compressor.option("loops")) return self;
+        self = AST_DWLoop.prototype.optimize.call(self, compressor);
+        if (self instanceof AST_While) {
+            if_break_in_loop(self, compressor);
+            self = make_node(AST_For, self, self).transform(compressor);
+        }
+        return self;
+    });
+
+    OPT(AST_For, function(self, compressor){
+        var cond = self.condition;
+        if (cond) {
+            cond = cond.evaluate(compressor);
+            self.condition = cond[0];
+        }
+        if (!compressor.option("loops")) return self;
+        if (cond) {
+            if (cond.length > 1 && !cond[1]) {
+                if (compressor.option("dead_code")) {
+                    var a = [];
+                    if (self.init instanceof AST_Statement) {
+                        a.push(self.init);
+                    }
+                    else if (self.init) {
+                        a.push(make_node(AST_SimpleStatement, self.init, {
+                            body: self.init
+                        }));
+                    }
+                    extract_declarations_from_unreachable_code(compressor, self.body, a);
+                    return make_node(AST_BlockStatement, self, { body: a });
                 }
             }
-            if (aborts(self.alternative)) {
-                var body = self.body;
-                self.body = self.alternative;
-                self.condition = negated_is_best ? negated : self.condition.negate(compressor);
+        }
+        if_break_in_loop(self, compressor);
+        return self;
+    });
+
+    OPT(AST_If, function(self, compressor){
+        if (!compressor.option("conditionals")) return self;
+        // if condition can be statically determined, warn and drop
+        // one of the blocks.  note, statically determined implies
+        // â€œhas no side effectsâ€; also it doesn't work for cases like
+        // `x && true`, though it probably should.
+        var cond = self.condition.evaluate(compressor);
+        self.condition = cond[0];
+        if (cond.length > 1) {
+            if (cond[1]) {
+                compressor.warn("Condition always true [{file}:{line},{col}]", self.condition.start);
+                if (compressor.option("dead_code")) {
+                    var a = [];
+                    if (self.alternative) {
+                        extract_declarations_from_unreachable_code(compressor, self.alternative, a);
+                    }
+                    a.push(self.body);
+                    return make_node(AST_BlockStatement, self, { body: a }).transform(compressor);
+                }
+            } else {
+                compressor.warn("Condition always false [{file}:{line},{col}]", self.condition.start);
+                if (compressor.option("dead_code")) {
+                    var a = [];
+                    extract_declarations_from_unreachable_code(compressor, self.body, a);
+                    if (self.alternative) a.push(self.alternative);
+                    return make_node(AST_BlockStatement, self, { body: a }).transform(compressor);
+                }
+            }
+        }
+        if (is_empty(self.alternative)) self.alternative = null;
+        var negated = self.condition.negate(compressor);
+        var negated_is_best = best_of(self.condition, negated) === negated;
+        if (self.alternative && negated_is_best) {
+            negated_is_best = false; // because we already do the switch here.
+            self.condition = negated;
+            var tmp = self.body;
+            self.body = self.alternative || make_node(AST_EmptyStatement);
+            self.alternative = tmp;
+        }
+        if (is_empty(self.body) && is_empty(self.alternative)) {
+            return make_node(AST_SimpleStatement, self.condition, {
+                body: self.condition
+            }).transform(compressor);
+        }
+        if (self.body instanceof AST_SimpleStatement
+            && self.alternative instanceof AST_SimpleStatement) {
+            return make_node(AST_SimpleStatement, self, {
+                body: make_node(AST_Conditional, self, {
+                    condition   : self.condition,
+                    consequent  : self.body.body,
+                    alternative : self.alternative.body
+                })
+            }).transform(compressor);
+        }
+        if (is_empty(self.alternative) && self.body instanceof AST_SimpleStatement) {
+            if (negated_is_best) return make_node(AST_SimpleStatement, self, {
+                body: make_node(AST_Binary, self, {
+                    operator : "||",
+                    left     : negated,
+                    right    : self.body.body
+                })
+            }).transform(compressor);
+            return make_node(AST_SimpleStatement, self, {
+                body: make_node(AST_Binary, self, {
+                    operator : "&&",
+                    left     : self.condition,
+                    right    : self.body.body
+                })
+            }).transform(compressor);
+        }
+        if (self.body instanceof AST_EmptyStatement
+            && self.alternative
+            && self.alternative instanceof AST_SimpleStatement) {
+            return make_node(AST_SimpleStatement, self, {
+                body: make_node(AST_Binary, self, {
+                    operator : "||",
+                    left     : self.condition,
+                    right    : self.alternative.body
+                })
+            }).transform(compressor);
+        }
+        if (self.body instanceof AST_Exit
+            && self.alternative instanceof AST_Exit
+            && self.body.TYPE == self.alternative.TYPE) {
+            return make_node(self.body.CTOR, self, {
+                value: make_node(AST_Conditional, self, {
+                    condition   : self.condition,
+                    consequent  : self.body.value || make_node(AST_Undefined, self.body).optimize(compressor),
+                    alternative : self.alternative.value || make_node(AST_Undefined, self.alternative).optimize(compressor)
+                })
+            }).transform(compressor);
+        }
+        if (self.body instanceof AST_If
+            && !self.body.alternative
+            && !self.alternative) {
+            self.condition = make_node(AST_Binary, self.condition, {
+                operator: "&&",
+                left: self.condition,
+                right: self.body.condition
+            }).transform(compressor);
+            self.body = self.body.body;
+        }
+        if (aborts(self.body)) {
+            if (self.alternative) {
+                var alt = self.alternative;
                 self.alternative = null;
                 return make_node(AST_BlockStatement, self, {
-                    body: [ self, body ]
+                    body: [ self, alt ]
                 }).transform(compressor);
             }
-            return self;
-        });
-        OPT(AST_Switch, function(self, compressor) {
-            if (self.body.length == 0 && compressor.option("conditionals")) {
-                return make_node(AST_SimpleStatement, self, {
-                    body: self.expression
-                }).transform(compressor);
-            }
+        }
+        if (aborts(self.alternative)) {
+            var body = self.body;
+            self.body = self.alternative;
+            self.condition = negated_is_best ? negated : self.condition.negate(compressor);
+            self.alternative = null;
+            return make_node(AST_BlockStatement, self, {
+                body: [ self, body ]
+            }).transform(compressor);
+        }
+        return self;
+    });
+
+    OPT(AST_Switch, function(self, compressor){
+        if (self.body.length == 0 && compressor.option("conditionals")) {
+            return make_node(AST_SimpleStatement, self, {
+                body: self.expression
+            }).transform(compressor);
+        }
+        for(;;) {
             var last_branch = self.body[self.body.length - 1];
             if (last_branch) {
-                var stat = last_branch.body[last_branch.body.length - 1];
-                if (stat instanceof AST_Break && loop_body(compressor.loopcontrol_target(stat.label)) === self) last_branch.body.pop();
-            }
-            return self;
-        });
-        OPT(AST_Case, function(self, compressor) {
-            self.body = tighten_body(self.body, compressor);
-            return self;
-        });
-        OPT(AST_Try, function(self, compressor) {
-            self.body = tighten_body(self.body, compressor);
-            return self;
-        });
-        AST_Definitions.DEFMETHOD("remove_initializers", function() {
-            this.definitions.forEach(function(def) {
-                def.value = null;
-            });
-        });
-        AST_Definitions.DEFMETHOD("to_assignments", function() {
-            var assignments = this.definitions.reduce(function(a, def) {
-                if (def.value) {
-                    var name = make_node(AST_SymbolRef, def.name, def.name);
-                    a.push(make_node(AST_Assign, def, {
-                        operator: "=",
-                        left: name,
-                        right: def.value
-                    }));
-                }
-                return a;
-            }, []);
-            if (assignments.length == 0) return null;
-            return AST_Seq.from_array(assignments);
-        });
-        OPT(AST_Definitions, function(self, compressor) {
-            if (self.definitions.length == 0) return make_node(AST_EmptyStatement, self);
-            return self;
-        });
-        OPT(AST_Function, function(self, compressor) {
-            self = AST_Lambda.prototype.optimize.call(self, compressor);
-            if (compressor.option("unused")) {
-                if (self.name && self.name.unreferenced()) {
-                    self.name = null;
+                var stat = last_branch.body[last_branch.body.length - 1]; // last statement
+                if (stat instanceof AST_Break && loop_body(compressor.loopcontrol_target(stat.label)) === self)
+                    last_branch.body.pop();
+                if (last_branch instanceof AST_Default && last_branch.body.length == 0) {
+                    self.body.pop();
+                    continue;
                 }
             }
-            return self;
-        });
-        OPT(AST_Call, function(self, compressor) {
-            if (compressor.option("unsafe")) {
-                var exp = self.expression;
-                if (exp instanceof AST_SymbolRef && exp.undeclared()) {
-                    switch (exp.name) {
-                      case "Array":
-                        if (self.args.length != 1) {
-                            return make_node(AST_Array, self, {
-                                elements: self.args
-                            });
-                        }
-                        break;
-
-                      case "Object":
-                        if (self.args.length == 0) {
-                            return make_node(AST_Object, self, {
-                                properties: []
-                            });
-                        }
-                        break;
-
-                      case "String":
-                        return make_node(AST_Binary, self, {
-                            left: self.args[0],
-                            operator: "+",
-                            right: make_node(AST_String, self, {
-                                value: ""
-                            })
-                        });
-                    }
-                } else if (exp instanceof AST_Dot && exp.property == "toString" && self.args.length == 0) {
-                    return make_node(AST_Binary, self, {
-                        left: make_node(AST_String, self, {
-                            value: ""
-                        }),
-                        operator: "+",
-                        right: exp.expression
+            break;
+        }
+        var exp = self.expression.evaluate(compressor);
+        out: if (exp.length == 2) try {
+            // constant expression
+            self.expression = exp[0];
+            if (!compressor.option("dead_code")) break out;
+            var value = exp[1];
+            var in_if = false;
+            var in_block = false;
+            var started = false;
+            var stopped = false;
+            var ruined = false;
+            var tt = new TreeTransformer(function(node, descend, in_list){
+                if (node instanceof AST_Lambda || node instanceof AST_SimpleStatement) {
+                    // no need to descend these node types
+                    return node;
+                }
+                else if (node instanceof AST_Switch && node === self) {
+                    node = node.clone();
+                    descend(node, this);
+                    return ruined ? node : make_node(AST_BlockStatement, node, {
+                        body: node.body.reduce(function(a, branch){
+                            return a.concat(branch.body);
+                        }, [])
                     }).transform(compressor);
                 }
-            }
-            if (compressor.option("side_effects")) {
-                if (self.expression instanceof AST_Function && self.args.length == 0 && !AST_Block.prototype.has_side_effects.call(self.expression)) {
-                    return make_node(AST_Undefined, self).transform(compressor);
+                else if (node instanceof AST_If || node instanceof AST_Try) {
+                    var save = in_if;
+                    in_if = !in_block;
+                    descend(node, this);
+                    in_if = save;
+                    return node;
                 }
-            }
-            return self;
-        });
-        OPT(AST_New, function(self, compressor) {
-            if (compressor.option("unsafe")) {
-                var exp = self.expression;
-                if (exp instanceof AST_SymbolRef && exp.undeclared()) {
-                    switch (exp.name) {
-                      case "Object":
-                      case "RegExp":
-                      case "Function":
-                      case "Error":
-                      case "Array":
-                        return make_node(AST_Call, self, self);
+                else if (node instanceof AST_StatementWithBody || node instanceof AST_Switch) {
+                    var save = in_block;
+                    in_block = true;
+                    descend(node, this);
+                    in_block = save;
+                    return node;
+                }
+                else if (node instanceof AST_Break && this.loopcontrol_target(node.label) === self) {
+                    if (in_if) {
+                        ruined = true;
+                        return node;
                     }
+                    if (in_block) return node;
+                    stopped = true;
+                    return in_list ? MAP.skip : make_node(AST_EmptyStatement, node);
+                }
+                else if (node instanceof AST_SwitchBranch && this.parent() === self) {
+                    if (stopped) return MAP.skip;
+                    if (node instanceof AST_Case) {
+                        var exp = node.expression.evaluate(compressor);
+                        if (exp.length < 2) {
+                            // got a case with non-constant expression, baling out
+                            throw self;
+                        }
+                        if (exp[1] === value || started) {
+                            started = true;
+                            if (aborts(node)) stopped = true;
+                            descend(node, this);
+                            return node;
+                        }
+                        return MAP.skip;
+                    }
+                    descend(node, this);
+                    return node;
+                }
+            });
+            tt.stack = compressor.stack.slice(); // so that's able to see parent nodes
+            self = self.transform(tt);
+        } catch(ex) {
+            if (ex !== self) throw ex;
+        }
+        return self;
+    });
+
+    OPT(AST_Case, function(self, compressor){
+        self.body = tighten_body(self.body, compressor);
+        return self;
+    });
+
+    OPT(AST_Try, function(self, compressor){
+        self.body = tighten_body(self.body, compressor);
+        return self;
+    });
+
+    AST_Definitions.DEFMETHOD("remove_initializers", function(){
+        this.definitions.forEach(function(def){ def.value = null });
+    });
+
+    AST_Definitions.DEFMETHOD("to_assignments", function(){
+        var assignments = this.definitions.reduce(function(a, def){
+            if (def.value) {
+                var name = make_node(AST_SymbolRef, def.name, def.name);
+                a.push(make_node(AST_Assign, def, {
+                    operator : "=",
+                    left     : name,
+                    right    : def.value
+                }));
+            }
+            return a;
+        }, []);
+        if (assignments.length == 0) return null;
+        return AST_Seq.from_array(assignments);
+    });
+
+    OPT(AST_Definitions, function(self, compressor){
+        if (self.definitions.length == 0)
+            return make_node(AST_EmptyStatement, self);
+        return self;
+    });
+
+    OPT(AST_Function, function(self, compressor){
+        self = AST_Lambda.prototype.optimize.call(self, compressor);
+        if (compressor.option("unused")) {
+            if (self.name && self.name.unreferenced()) {
+                self.name = null;
+            }
+        }
+        return self;
+    });
+
+    OPT(AST_Call, function(self, compressor){
+        if (compressor.option("unsafe")) {
+            var exp = self.expression;
+            if (exp instanceof AST_SymbolRef && exp.undeclared()) {
+                switch (exp.name) {
+                  case "Array":
+                    if (self.args.length != 1) {
+                        return make_node(AST_Array, self, {
+                            elements: self.args
+                        }).transform(compressor);
+                    }
+                    break;
+                  case "Object":
+                    if (self.args.length == 0) {
+                        return make_node(AST_Object, self, {
+                            properties: []
+                        });
+                    }
+                    break;
+                  case "String":
+                    if (self.args.length == 0) return make_node(AST_String, self, {
+                        value: ""
+                    });
+                    if (self.args.length <= 1) return make_node(AST_Binary, self, {
+                        left: self.args[0],
+                        operator: "+",
+                        right: make_node(AST_String, self, { value: "" })
+                    }).transform(compressor);
+                    break;
+                  case "Number":
+                    if (self.args.length == 0) return make_node(AST_Number, self, {
+                        value: 0
+                    });
+                    if (self.args.length == 1) return make_node(AST_UnaryPrefix, self, {
+                        expression: self.args[0],
+                        operator: "+"
+                    }).transform(compressor);
+                  case "Boolean":
+                    if (self.args.length == 0) return make_node(AST_False, self);
+                    if (self.args.length == 1) return make_node(AST_UnaryPrefix, self, {
+                        expression: make_node(AST_UnaryPrefix, null, {
+                            expression: self.args[0],
+                            operator: "!"
+                        }),
+                        operator: "!"
+                    }).transform(compressor);
+                    break;
+                  case "Function":
+                    if (all(self.args, function(x){ return x instanceof AST_String })) {
+                        // quite a corner-case, but we can handle it:
+                        //   https://github.com/mishoo/UglifyJS2/issues/203
+                        // if the code argument is a constant, then we can minify it.
+                        try {
+                            var code = "(function(" + self.args.slice(0, -1).map(function(arg){
+                                return arg.value;
+                            }).join(",") + "){" + self.args[self.args.length - 1].value + "})()";
+                            var ast = parse(code);
+                            ast.figure_out_scope({ screw_ie8: compressor.option("screw_ie8") });
+                            var comp = new Compressor(compressor.options);
+                            ast = ast.transform(comp);
+                            ast.figure_out_scope({ screw_ie8: compressor.option("screw_ie8") });
+                            ast.mangle_names();
+                            var fun;
+                            try {
+                                ast.walk(new TreeWalker(function(node){
+                                    if (node instanceof AST_Lambda) {
+                                        fun = node;
+                                        throw ast;
+                                    }
+                                }));
+                            } catch(ex) {
+                                if (ex !== ast) throw ex;
+                            };
+                            var args = fun.argnames.map(function(arg, i){
+                                return make_node(AST_String, self.args[i], {
+                                    value: arg.print_to_string()
+                                });
+                            });
+                            var code = OutputStream();
+                            AST_BlockStatement.prototype._codegen.call(fun, fun, code);
+                            code = code.toString().replace(/^\{|\}$/g, "");
+                            args.push(make_node(AST_String, self.args[self.args.length - 1], {
+                                value: code
+                            }));
+                            self.args = args;
+                            return self;
+                        } catch(ex) {
+                            if (ex instanceof JS_Parse_Error) {
+                                compressor.warn("Error parsing code passed to new Function [{file}:{line},{col}]", self.args[self.args.length - 1].start);
+                                compressor.warn(ex.toString());
+                            } else {
+                                console.log(ex);
+                                throw ex;
+                            }
+                        }
+                    }
+                    break;
                 }
             }
+            else if (exp instanceof AST_Dot && exp.property == "toString" && self.args.length == 0) {
+                return make_node(AST_Binary, self, {
+                    left: make_node(AST_String, self, { value: "" }),
+                    operator: "+",
+                    right: exp.expression
+                }).transform(compressor);
+            }
+            else if (exp instanceof AST_Dot && exp.expression instanceof AST_Array && exp.property == "join") EXIT: {
+                var separator = self.args.length == 0 ? "," : self.args[0].evaluate(compressor)[1];
+                if (separator == null) break EXIT; // not a constant
+                var elements = exp.expression.elements.reduce(function(a, el){
+                    el = el.evaluate(compressor);
+                    if (a.length == 0 || el.length == 1) {
+                        a.push(el);
+                    } else {
+                        var last = a[a.length - 1];
+                        if (last.length == 2) {
+                            // it's a constant
+                            var val = "" + last[1] + separator + el[1];
+                            a[a.length - 1] = [ make_node_from_constant(compressor, val, last[0]), val ];
+                        } else {
+                            a.push(el);
+                        }
+                    }
+                    return a;
+                }, []);
+                if (elements.length == 0) return make_node(AST_String, self, { value: "" });
+                if (elements.length == 1) return elements[0][0];
+                if (separator == "") {
+                    var first;
+                    if (elements[0][0] instanceof AST_String
+                        || elements[1][0] instanceof AST_String) {
+                        first = elements.shift()[0];
+                    } else {
+                        first = make_node(AST_String, self, { value: "" });
+                    }
+                    return elements.reduce(function(prev, el){
+                        return make_node(AST_Binary, el[0], {
+                            operator : "+",
+                            left     : prev,
+                            right    : el[0],
+                        });
+                    }, first).transform(compressor);
+                }
+                // need this awkward cloning to not affect original element
+                // best_of will decide which one to get through.
+                var node = self.clone();
+                node.expression = node.expression.clone();
+                node.expression.expression = node.expression.expression.clone();
+                node.expression.expression.elements = elements.map(function(el){
+                    return el[0];
+                });
+                return best_of(self, node);
+            }
+        }
+        if (compressor.option("side_effects")) {
+            if (self.expression instanceof AST_Function
+                && self.args.length == 0
+                && !AST_Block.prototype.has_side_effects.call(self.expression, compressor)) {
+                return make_node(AST_Undefined, self).transform(compressor);
+            }
+        }
+        if (compressor.option("drop_console")) {
+            if (self.expression instanceof AST_PropAccess &&
+                self.expression.expression instanceof AST_SymbolRef &&
+                self.expression.expression.name == "console" &&
+                self.expression.expression.undeclared()) {
+                return make_node(AST_Undefined, self).transform(compressor);
+            }
+        }
+        return self.evaluate(compressor)[0];
+    });
+
+    OPT(AST_New, function(self, compressor){
+        if (compressor.option("unsafe")) {
+            var exp = self.expression;
+            if (exp instanceof AST_SymbolRef && exp.undeclared()) {
+                switch (exp.name) {
+                  case "Object":
+                  case "RegExp":
+                  case "Function":
+                  case "Error":
+                  case "Array":
+                    return make_node(AST_Call, self, self).transform(compressor);
+                }
+            }
+        }
+        return self;
+    });
+
+    OPT(AST_Seq, function(self, compressor){
+        if (!compressor.option("side_effects"))
             return self;
-        });
-        OPT(AST_Seq, function(self, compressor) {
-            if (!compressor.option("side_effects")) return self;
-            if (!self.car.has_side_effects()) return self.cdr;
-            if (compressor.option("cascade")) {
-                if (self.car instanceof AST_Assign && !self.car.left.has_side_effects() && self.car.left.equivalent_to(self.cdr)) {
+        if (!self.car.has_side_effects(compressor)) {
+            // we shouldn't compress (1,eval)(something) to
+            // eval(something) because that changes the meaning of
+            // eval (becomes lexical instead of global).
+            var p;
+            if (!(self.cdr instanceof AST_SymbolRef
+                  && self.cdr.name == "eval"
+                  && self.cdr.undeclared()
+                  && (p = compressor.parent()) instanceof AST_Call
+                  && p.expression === self)) {
+                return self.cdr;
+            }
+        }
+        if (compressor.option("cascade")) {
+            if (self.car instanceof AST_Assign
+                && !self.car.left.has_side_effects(compressor)) {
+                if (self.car.left.equivalent_to(self.cdr)) {
                     return self.car;
                 }
-                if (!self.car.has_side_effects() && !self.cdr.has_side_effects() && self.car.equivalent_to(self.cdr)) {
-                    return self.car;
+                if (self.cdr instanceof AST_Call
+                    && self.cdr.expression.equivalent_to(self.car.left)) {
+                    self.cdr.expression = self.car;
+                    return self.cdr;
                 }
             }
-            return self;
-        });
-        AST_Unary.DEFMETHOD("lift_sequences", function(compressor) {
-            if (compressor.option("sequences")) {
-                if (this.expression instanceof AST_Seq) {
-                    var seq = this.expression;
-                    var x = seq.to_array();
-                    this.expression = x.pop();
-                    x.push(this);
-                    seq = AST_Seq.from_array(x).transform(compressor);
-                    return seq;
-                }
+            if (!self.car.has_side_effects(compressor)
+                && !self.cdr.has_side_effects(compressor)
+                && self.car.equivalent_to(self.cdr)) {
+                return self.car;
             }
-            return this;
-        });
-        OPT(AST_UnaryPostfix, function(self, compressor) {
-            return self.lift_sequences(compressor);
-        });
-        OPT(AST_UnaryPrefix, function(self, compressor) {
-            self = self.lift_sequences(compressor);
-            var e = self.expression;
-            if (compressor.option("booleans") && compressor.in_boolean_context()) {
-                switch (self.operator) {
-                  case "!":
-                    if (e instanceof AST_UnaryPrefix && e.operator == "!") {
-                        return e.expression;
-                    }
-                    break;
+        }
+        if (self.cdr instanceof AST_UnaryPrefix
+            && self.cdr.operator == "void"
+            && !self.cdr.expression.has_side_effects(compressor)) {
+            self.cdr.operator = self.car;
+            return self.cdr;
+        }
+        if (self.cdr instanceof AST_Undefined) {
+            return make_node(AST_UnaryPrefix, self, {
+                operator   : "void",
+                expression : self.car
+            });
+        }
+        return self;
+    });
 
-                  case "typeof":
-                    compressor.warn("Boolean expression always true [{file}:{line},{col}]", self.start);
-                    return make_node(AST_True, self);
-                }
-                if (e instanceof AST_Binary && self.operator == "!") {
-                    self = best_of(self, e.negate(compressor));
-                }
+    AST_Unary.DEFMETHOD("lift_sequences", function(compressor){
+        if (compressor.option("sequences")) {
+            if (this.expression instanceof AST_Seq) {
+                var seq = this.expression;
+                var x = seq.to_array();
+                this.expression = x.pop();
+                x.push(this);
+                seq = AST_Seq.from_array(x).transform(compressor);
+                return seq;
             }
-            return self.evaluate(compressor)[0];
-        });
-        AST_Binary.DEFMETHOD("lift_sequences", function(compressor) {
-            if (compressor.option("sequences")) {
-                if (this.left instanceof AST_Seq) {
-                    var seq = this.left;
-                    var x = seq.to_array();
-                    this.left = x.pop();
-                    x.push(this);
-                    seq = AST_Seq.from_array(x).transform(compressor);
-                    return seq;
-                }
-                if (this.right instanceof AST_Seq && !(this.operator == "||" || this.operator == "&&") && !this.left.has_side_effects()) {
-                    var seq = this.right;
-                    var x = seq.to_array();
-                    this.right = x.pop();
-                    x.push(this);
-                    seq = AST_Seq.from_array(x).transform(compressor);
-                    return seq;
-                }
-            }
-            return this;
-        });
-        var commutativeOperators = makePredicate("== === != !== * & | ^");
-        OPT(AST_Binary, function(self, compressor) {
-            function reverse(op) {
-                if (op) self.operator = op;
-                var tmp = self.left;
-                self.left = self.right;
-                self.right = tmp;
-            }
-            if (commutativeOperators(self.operator)) {
-                if (self.right instanceof AST_Constant && !(self.left instanceof AST_Constant)) {
-                    reverse();
-                }
-            }
-            self = self.lift_sequences(compressor);
-            if (compressor.option("comparisons")) switch (self.operator) {
-              case "===":
-              case "!==":
-                if (self.left.is_string() && self.right.is_string() || self.left.is_boolean() && self.right.is_boolean()) {
-                    self.operator = self.operator.substr(0, 2);
-                }
+        }
+        return this;
+    });
 
-              case "==":
-              case "!=":
-                if (self.left instanceof AST_String && self.left.value == "undefined" && self.right instanceof AST_UnaryPrefix && self.right.operator == "typeof") {
-                    if (!(self.right.expression instanceof AST_SymbolRef) || !self.right.expression.undeclared()) {
-                        self.left = self.right.expression;
-                        self.right = make_node(AST_Undefined, self.left).optimize(compressor);
-                        if (self.operator.length == 2) self.operator += "=";
-                    }
+    OPT(AST_UnaryPostfix, function(self, compressor){
+        return self.lift_sequences(compressor);
+    });
+
+    OPT(AST_UnaryPrefix, function(self, compressor){
+        self = self.lift_sequences(compressor);
+        var e = self.expression;
+        if (compressor.option("booleans") && compressor.in_boolean_context()) {
+            switch (self.operator) {
+              case "!":
+                if (e instanceof AST_UnaryPrefix && e.operator == "!") {
+                    // !!foo ==> foo, if we're in boolean context
+                    return e.expression;
                 }
                 break;
-            }
-            if (compressor.option("booleans") && compressor.in_boolean_context()) switch (self.operator) {
-              case "&&":
-                var ll = self.left.evaluate(compressor);
-                var rr = self.right.evaluate(compressor);
-                if (ll.length > 1 && !ll[1] || rr.length > 1 && !rr[1]) {
-                    compressor.warn("Boolean && always false [{file}:{line},{col}]", self.start);
-                    return make_node(AST_False, self);
-                }
-                if (ll.length > 1 && ll[1]) {
-                    return rr[0];
-                }
-                if (rr.length > 1 && rr[1]) {
-                    return ll[0];
-                }
-                break;
-
-              case "||":
-                var ll = self.left.evaluate(compressor);
-                var rr = self.right.evaluate(compressor);
-                if (ll.length > 1 && ll[1] || rr.length > 1 && rr[1]) {
-                    compressor.warn("Boolean || always true [{file}:{line},{col}]", self.start);
-                    return make_node(AST_True, self);
-                }
-                if (ll.length > 1 && !ll[1]) {
-                    return rr[0];
-                }
-                if (rr.length > 1 && !rr[1]) {
-                    return ll[0];
-                }
-                break;
-
-              case "+":
-                var ll = self.left.evaluate(compressor);
-                var rr = self.right.evaluate(compressor);
-                if (ll.length > 1 && ll[0] instanceof AST_String && ll[1] || rr.length > 1 && rr[0] instanceof AST_String && rr[1]) {
-                    compressor.warn("+ in boolean context always true [{file}:{line},{col}]", self.start);
-                    return make_node(AST_True, self);
-                }
-                break;
-            }
-            var exp = self.evaluate(compressor);
-            if (exp.length > 1) {
-                if (best_of(exp[0], self) !== self) return exp[0];
-            }
-            if (compressor.option("comparisons")) {
-                if (!(compressor.parent() instanceof AST_Binary) || compressor.parent() instanceof AST_Assign) {
-                    var negated = make_node(AST_UnaryPrefix, self, {
-                        operator: "!",
-                        expression: self.negate(compressor)
-                    });
-                    self = best_of(self, negated);
-                }
-                switch (self.operator) {
-                  case "<":
-                    reverse(">");
-                    break;
-
-                  case "<=":
-                    reverse(">=");
-                    break;
-                }
-            }
-            return self;
-        });
-        OPT(AST_SymbolRef, function(self, compressor) {
-            if (self.undeclared()) {
-                var defines = compressor.option("global_defs");
-                if (defines && defines.hasOwnProperty(self.name)) {
-                    return make_node_from_constant(compressor, defines[self.name], self);
-                }
-                switch (self.name) {
-                  case "undefined":
-                    return make_node(AST_Undefined, self);
-
-                  case "NaN":
-                    return make_node(AST_NaN, self);
-
-                  case "Infinity":
-                    return make_node(AST_Infinity, self);
-                }
-            }
-            return self;
-        });
-        OPT(AST_Undefined, function(self, compressor) {
-            if (compressor.option("unsafe")) {
-                var scope = compressor.find_parent(AST_Scope);
-                var undef = scope.find_variable("undefined");
-                if (undef) {
-                    var ref = make_node(AST_SymbolRef, self, {
-                        name: "undefined",
-                        scope: scope,
-                        thedef: undef
-                    });
-                    ref.reference();
-                    return ref;
-                }
-            }
-            return self;
-        });
-        var ASSIGN_OPS = [ "+", "-", "/", "*", "%", ">>", "<<", ">>>", "|", "^", "&" ];
-        OPT(AST_Assign, function(self, compressor) {
-            self = self.lift_sequences(compressor);
-            if (self.operator == "=" && self.left instanceof AST_SymbolRef && self.right instanceof AST_Binary && self.right.left instanceof AST_SymbolRef && self.right.left.name == self.left.name && member(self.right.operator, ASSIGN_OPS)) {
-                self.operator = self.right.operator + "=";
-                self.right = self.right.right;
-            }
-            return self;
-        });
-        OPT(AST_Conditional, function(self, compressor) {
-            if (!compressor.option("conditionals")) return self;
-            if (self.condition instanceof AST_Seq) {
-                var car = self.condition.car;
-                self.condition = self.condition.cdr;
-                return AST_Seq.cons(car, self);
-            }
-            var cond = self.condition.evaluate(compressor);
-            if (cond.length > 1) {
-                if (cond[1]) {
-                    compressor.warn("Condition always true [{file}:{line},{col}]", self.start);
-                    return self.consequent;
-                } else {
-                    compressor.warn("Condition always false [{file}:{line},{col}]", self.start);
-                    return self.alternative;
-                }
-            }
-            var negated = cond[0].negate(compressor);
-            if (best_of(cond[0], negated) === negated) {
-                self = make_node(AST_Conditional, self, {
-                    condition: negated,
-                    consequent: self.alternative,
-                    alternative: self.consequent
-                });
-            }
-            var consequent = self.consequent;
-            var alternative = self.alternative;
-            if (consequent instanceof AST_Assign && alternative instanceof AST_Assign && consequent.operator == alternative.operator && consequent.left.equivalent_to(alternative.left)) {
-                self = make_node(AST_Assign, self, {
-                    operator: consequent.operator,
-                    left: consequent.left,
-                    right: make_node(AST_Conditional, self, {
-                        condition: self.condition,
-                        consequent: consequent.right,
-                        alternative: alternative.right
-                    })
-                });
-            }
-            return self;
-        });
-        OPT(AST_Boolean, function(self, compressor) {
-            if (compressor.option("booleans")) {
-                var p = compressor.parent();
-                if (p instanceof AST_Binary && (p.operator == "==" || p.operator == "!=")) {
-                    compressor.warn("Non-strict equality against boolean: {operator} {value} [{file}:{line},{col}]", {
-                        operator: p.operator,
-                        value: self.value,
-                        file: p.start.file,
-                        line: p.start.line,
-                        col: p.start.col
-                    });
-                    return make_node(AST_Number, self, {
-                        value: +self.value
-                    });
-                }
-                return make_node(AST_UnaryPrefix, self, {
-                    operator: "!",
-                    expression: make_node(AST_Number, self, {
-                        value: 1 - self.value
-                    })
-                });
-            }
-            return self;
-        });
-        OPT(AST_Sub, function(self, compressor) {
-            var prop = self.property;
-            if (prop instanceof AST_String && compressor.option("properties")) {
-                prop = prop.getValue();
-                if (is_identifier(prop)) {
-                    return make_node(AST_Dot, self, {
-                        expression: self.expression,
-                        property: prop
-                    });
-                }
-            }
-            return self;
-        });
-        function literals_in_boolean_context(self, compressor) {
-            if (compressor.option("booleans") && compressor.in_boolean_context()) {
+              case "typeof":
+                // typeof always returns a non-empty string, thus it's
+                // always true in booleans
+                compressor.warn("Boolean expression always true [{file}:{line},{col}]", self.start);
                 return make_node(AST_True, self);
             }
-            return self;
-        }
-        OPT(AST_Array, literals_in_boolean_context);
-        OPT(AST_Object, literals_in_boolean_context);
-        OPT(AST_RegExp, literals_in_boolean_context);
-    })();
-    "use strict";
-    function SourceMap(options) {
-        options = defaults(options, {
-            file: null,
-            root: null,
-            orig: null
-        });
-        var generator = new MOZ_SourceMap.SourceMapGenerator({
-            file: options.file,
-            sourceRoot: options.root
-        });
-        var orig_map = options.orig && new MOZ_SourceMap.SourceMapConsumer(options.orig);
-        function add(source, gen_line, gen_col, orig_line, orig_col, name) {
-            if (orig_map) {
-                var info = orig_map.originalPositionFor({
-                    line: orig_line,
-                    column: orig_col
-                });
-                source = info.source;
-                orig_line = info.line;
-                orig_col = info.column;
-                name = info.name;
+            if (e instanceof AST_Binary && self.operator == "!") {
+                self = best_of(self, e.negate(compressor));
             }
-            generator.addMapping({
-                generated: {
-                    line: gen_line,
-                    column: gen_col
-                },
-                original: {
-                    line: orig_line,
-                    column: orig_col
-                },
-                source: source,
-                name: name
-            });
         }
-        return {
-            add: add,
-            get: function() {
-                return generator;
-            },
-            toString: function() {
-                return generator.toString();
-            }
-        };
+        return self.evaluate(compressor)[0];
+    });
+
+    function has_side_effects_or_prop_access(node, compressor) {
+        var save_pure_getters = compressor.option("pure_getters");
+        compressor.options.pure_getters = false;
+        var ret = node.has_side_effects(compressor);
+        compressor.options.pure_getters = save_pure_getters;
+        return ret;
     }
-    "use strict";
-    (function() {
-        var MOZ_TO_ME = {
-            TryStatement: function(M) {
-                return new AST_Try({
-                    start: my_start_token(M),
-                    end: my_end_token(M),
-                    body: from_moz(M.block).body,
-                    bcatch: from_moz(M.handlers[0]),
-                    bfinally: M.finalizer ? new AST_Finally(from_moz(M.finalizer)) : null
-                });
-            },
-            CatchClause: function(M) {
-                return new AST_Catch({
-                    start: my_start_token(M),
-                    end: my_end_token(M),
-                    argname: from_moz(M.param),
-                    body: from_moz(M.body).body
-                });
-            },
-            ObjectExpression: function(M) {
-                return new AST_Object({
-                    start: my_start_token(M),
-                    end: my_end_token(M),
-                    properties: M.properties.map(function(prop) {
-                        var key = prop.key;
-                        var name = key.type == "Identifier" ? key.name : key.value;
-                        var args = {
-                            start: my_start_token(key),
-                            end: my_end_token(prop.value),
-                            key: name,
-                            value: from_moz(prop.value)
-                        };
-                        switch (prop.kind) {
-                          case "init":
-                            return new AST_ObjectKeyVal(args);
 
-                          case "set":
-                            args.value.name = from_moz(key);
-                            return new AST_ObjectSetter(args);
+    AST_Binary.DEFMETHOD("lift_sequences", function(compressor){
+        if (compressor.option("sequences")) {
+            if (this.left instanceof AST_Seq) {
+                var seq = this.left;
+                var x = seq.to_array();
+                this.left = x.pop();
+                x.push(this);
+                seq = AST_Seq.from_array(x).transform(compressor);
+                return seq;
+            }
+            if (this.right instanceof AST_Seq
+                && this instanceof AST_Assign
+                && !has_side_effects_or_prop_access(this.left, compressor)) {
+                var seq = this.right;
+                var x = seq.to_array();
+                this.right = x.pop();
+                x.push(this);
+                seq = AST_Seq.from_array(x).transform(compressor);
+                return seq;
+            }
+        }
+        return this;
+    });
 
-                          case "get":
-                            args.value.name = from_moz(key);
-                            return new AST_ObjectGetter(args);
-                        }
-                    })
-                });
-            },
-            SequenceExpression: function(M) {
-                return AST_Seq.from_array(M.expressions.map(from_moz));
-            },
-            MemberExpression: function(M) {
-                return new (M.computed ? AST_Sub : AST_Dot)({
-                    start: my_start_token(M),
-                    end: my_end_token(M),
-                    property: M.computed ? from_moz(M.property) : M.property.name,
-                    expression: from_moz(M.object)
-                });
-            },
-            SwitchCase: function(M) {
-                return new (M.test ? AST_Case : AST_Default)({
-                    start: my_start_token(M),
-                    end: my_end_token(M),
-                    expression: from_moz(M.test),
-                    body: M.consequent.map(from_moz)
-                });
-            },
-            Literal: function(M) {
-                var val = M.value, args = {
-                    start: my_start_token(M),
-                    end: my_end_token(M)
-                };
-                if (val === null) return new AST_Null(args);
-                switch (typeof val) {
-                  case "string":
-                    args.value = val;
-                    return new AST_String(args);
+    var commutativeOperators = makePredicate("== === != !== * & | ^");
 
-                  case "number":
-                    args.value = val;
-                    return new AST_Number(args);
-
-                  case "boolean":
-                    return new (val ? AST_True : AST_False)(args);
-
-                  default:
-                    args.value = val;
-                    return new AST_RegExp(args);
+    OPT(AST_Binary, function(self, compressor){
+        var reverse = compressor.has_directive("use asm") ? noop
+            : function(op, force) {
+                if (force || !(self.left.has_side_effects(compressor) || self.right.has_side_effects(compressor))) {
+                    if (op) self.operator = op;
+                    var tmp = self.left;
+                    self.left = self.right;
+                    self.right = tmp;
                 }
-            },
-            UnaryExpression: From_Moz_Unary,
-            UpdateExpression: From_Moz_Unary,
-            Identifier: function(M) {
-                var p = FROM_MOZ_STACK[FROM_MOZ_STACK.length - 2];
-                return new (M.name == "this" ? AST_This : p.type == "LabeledStatement" ? AST_Label : p.type == "VariableDeclarator" && p.id === M ? p.kind == "const" ? AST_SymbolConst : AST_SymbolVar : p.type == "FunctionExpression" ? p.id === M ? AST_SymbolLambda : AST_SymbolFunarg : p.type == "FunctionDeclaration" ? p.id === M ? AST_SymbolDefun : AST_SymbolFunarg : p.type == "CatchClause" ? AST_SymbolCatch : p.type == "BreakStatement" || p.type == "ContinueStatement" ? AST_LabelRef : AST_SymbolRef)({
-                    start: my_start_token(M),
-                    end: my_end_token(M),
-                    name: M.name
+            };
+        if (commutativeOperators(self.operator)) {
+            if (self.right instanceof AST_Constant
+                && !(self.left instanceof AST_Constant)) {
+                // if right is a constant, whatever side effects the
+                // left side might have could not influence the
+                // result.  hence, force switch.
+
+                if (!(self.left instanceof AST_Binary
+                      && PRECEDENCE[self.left.operator] >= PRECEDENCE[self.operator])) {
+                    reverse(null, true);
+                }
+            }
+            if (/^[!=]==?$/.test(self.operator)) {
+                if (self.left instanceof AST_SymbolRef && self.right instanceof AST_Conditional) {
+                    if (self.right.consequent instanceof AST_SymbolRef
+                        && self.right.consequent.definition() === self.left.definition()) {
+                        if (/^==/.test(self.operator)) return self.right.condition;
+                        if (/^!=/.test(self.operator)) return self.right.condition.negate(compressor);
+                    }
+                    if (self.right.alternative instanceof AST_SymbolRef
+                        && self.right.alternative.definition() === self.left.definition()) {
+                        if (/^==/.test(self.operator)) return self.right.condition.negate(compressor);
+                        if (/^!=/.test(self.operator)) return self.right.condition;
+                    }
+                }
+                if (self.right instanceof AST_SymbolRef && self.left instanceof AST_Conditional) {
+                    if (self.left.consequent instanceof AST_SymbolRef
+                        && self.left.consequent.definition() === self.right.definition()) {
+                        if (/^==/.test(self.operator)) return self.left.condition;
+                        if (/^!=/.test(self.operator)) return self.left.condition.negate(compressor);
+                    }
+                    if (self.left.alternative instanceof AST_SymbolRef
+                        && self.left.alternative.definition() === self.right.definition()) {
+                        if (/^==/.test(self.operator)) return self.left.condition.negate(compressor);
+                        if (/^!=/.test(self.operator)) return self.left.condition;
+                    }
+                }
+            }
+        }
+        self = self.lift_sequences(compressor);
+        if (compressor.option("comparisons")) switch (self.operator) {
+          case "===":
+          case "!==":
+            if ((self.left.is_string(compressor) && self.right.is_string(compressor)) ||
+                (self.left.is_boolean() && self.right.is_boolean())) {
+                self.operator = self.operator.substr(0, 2);
+            }
+            // XXX: intentionally falling down to the next case
+          case "==":
+          case "!=":
+            if (self.left instanceof AST_String
+                && self.left.value == "undefined"
+                && self.right instanceof AST_UnaryPrefix
+                && self.right.operator == "typeof"
+                && compressor.option("unsafe")) {
+                if (!(self.right.expression instanceof AST_SymbolRef)
+                    || !self.right.expression.undeclared()) {
+                    self.right = self.right.expression;
+                    self.left = make_node(AST_Undefined, self.left).optimize(compressor);
+                    if (self.operator.length == 2) self.operator += "=";
+                }
+            }
+            break;
+        }
+        if (compressor.option("booleans") && compressor.in_boolean_context()) switch (self.operator) {
+          case "&&":
+            var ll = self.left.evaluate(compressor);
+            var rr = self.right.evaluate(compressor);
+            if ((ll.length > 1 && !ll[1]) || (rr.length > 1 && !rr[1])) {
+                compressor.warn("Boolean && always false [{file}:{line},{col}]", self.start);
+                return make_node(AST_False, self);
+            }
+            if (ll.length > 1 && ll[1]) {
+                return rr[0];
+            }
+            if (rr.length > 1 && rr[1]) {
+                return ll[0];
+            }
+            break;
+          case "||":
+            var ll = self.left.evaluate(compressor);
+            var rr = self.right.evaluate(compressor);
+            if ((ll.length > 1 && ll[1]) || (rr.length > 1 && rr[1])) {
+                compressor.warn("Boolean || always true [{file}:{line},{col}]", self.start);
+                return make_node(AST_True, self);
+            }
+            if (ll.length > 1 && !ll[1]) {
+                return rr[0];
+            }
+            if (rr.length > 1 && !rr[1]) {
+                return ll[0];
+            }
+            break;
+          case "+":
+            var ll = self.left.evaluate(compressor);
+            var rr = self.right.evaluate(compressor);
+            if ((ll.length > 1 && ll[0] instanceof AST_String && ll[1]) ||
+                (rr.length > 1 && rr[0] instanceof AST_String && rr[1])) {
+                compressor.warn("+ in boolean context always true [{file}:{line},{col}]", self.start);
+                return make_node(AST_True, self);
+            }
+            break;
+        }
+        if (compressor.option("comparisons")) {
+            if (!(compressor.parent() instanceof AST_Binary)
+                || compressor.parent() instanceof AST_Assign) {
+                var negated = make_node(AST_UnaryPrefix, self, {
+                    operator: "!",
+                    expression: self.negate(compressor)
+                });
+                self = best_of(self, negated);
+            }
+            switch (self.operator) {
+              case "<": reverse(">"); break;
+              case "<=": reverse(">="); break;
+            }
+        }
+        if (self.operator == "+" && self.right instanceof AST_String
+            && self.right.getValue() === "" && self.left instanceof AST_Binary
+            && self.left.operator == "+" && self.left.is_string(compressor)) {
+            return self.left;
+        }
+        if (compressor.option("evaluate")) {
+            if (self.operator == "+") {
+                if (self.left instanceof AST_Constant
+                    && self.right instanceof AST_Binary
+                    && self.right.operator == "+"
+                    && self.right.left instanceof AST_Constant
+                    && self.right.is_string(compressor)) {
+                    self = make_node(AST_Binary, self, {
+                        operator: "+",
+                        left: make_node(AST_String, null, {
+                            value: "" + self.left.getValue() + self.right.left.getValue(),
+                            start: self.left.start,
+                            end: self.right.left.end
+                        }),
+                        right: self.right.right
+                    });
+                }
+                if (self.right instanceof AST_Constant
+                    && self.left instanceof AST_Binary
+                    && self.left.operator == "+"
+                    && self.left.right instanceof AST_Constant
+                    && self.left.is_string(compressor)) {
+                    self = make_node(AST_Binary, self, {
+                        operator: "+",
+                        left: self.left.left,
+                        right: make_node(AST_String, null, {
+                            value: "" + self.left.right.getValue() + self.right.getValue(),
+                            start: self.left.right.start,
+                            end: self.right.end
+                        })
+                    });
+                }
+                if (self.left instanceof AST_Binary
+                    && self.left.operator == "+"
+                    && self.left.is_string(compressor)
+                    && self.left.right instanceof AST_Constant
+                    && self.right instanceof AST_Binary
+                    && self.right.operator == "+"
+                    && self.right.left instanceof AST_Constant
+                    && self.right.is_string(compressor)) {
+                    self = make_node(AST_Binary, self, {
+                        operator: "+",
+                        left: make_node(AST_Binary, self.left, {
+                            operator: "+",
+                            left: self.left.left,
+                            right: make_node(AST_String, null, {
+                                value: "" + self.left.right.getValue() + self.right.left.getValue(),
+                                start: self.left.right.start,
+                                end: self.right.left.end
+                            })
+                        }),
+                        right: self.right.right
+                    });
+                }
+            }
+        }
+        // x * (y * z)  ==>  x * y * z
+        if (self.right instanceof AST_Binary
+            && self.right.operator == self.operator
+            && (self.operator == "*" || self.operator == "&&" || self.operator == "||"))
+        {
+            self.left = make_node(AST_Binary, self.left, {
+                operator : self.operator,
+                left     : self.left,
+                right    : self.right.left
+            });
+            self.right = self.right.right;
+            return self.transform(compressor);
+        }
+        return self.evaluate(compressor)[0];
+    });
+
+    OPT(AST_SymbolRef, function(self, compressor){
+        if (self.undeclared()) {
+            var defines = compressor.option("global_defs");
+            if (defines && defines.hasOwnProperty(self.name)) {
+                return make_node_from_constant(compressor, defines[self.name], self);
+            }
+            switch (self.name) {
+              case "undefined":
+                return make_node(AST_Undefined, self);
+              case "NaN":
+                return make_node(AST_NaN, self);
+              case "Infinity":
+                return make_node(AST_Infinity, self);
+            }
+        }
+        return self;
+    });
+
+    OPT(AST_Undefined, function(self, compressor){
+        if (compressor.option("unsafe")) {
+            var scope = compressor.find_parent(AST_Scope);
+            var undef = scope.find_variable("undefined");
+            if (undef) {
+                var ref = make_node(AST_SymbolRef, self, {
+                    name   : "undefined",
+                    scope  : scope,
+                    thedef : undef
+                });
+                ref.reference();
+                return ref;
+            }
+        }
+        return self;
+    });
+
+    var ASSIGN_OPS = [ '+', '-', '/', '*', '%', '>>', '<<', '>>>', '|', '^', '&' ];
+    OPT(AST_Assign, function(self, compressor){
+        self = self.lift_sequences(compressor);
+        if (self.operator == "="
+            && self.left instanceof AST_SymbolRef
+            && self.right instanceof AST_Binary
+            && self.right.left instanceof AST_SymbolRef
+            && self.right.left.name == self.left.name
+            && member(self.right.operator, ASSIGN_OPS)) {
+            self.operator = self.right.operator + "=";
+            self.right = self.right.right;
+        }
+        return self;
+    });
+
+    OPT(AST_Conditional, function(self, compressor){
+        if (!compressor.option("conditionals")) return self;
+        if (self.condition instanceof AST_Seq) {
+            var car = self.condition.car;
+            self.condition = self.condition.cdr;
+            return AST_Seq.cons(car, self);
+        }
+        var cond = self.condition.evaluate(compressor);
+        if (cond.length > 1) {
+            if (cond[1]) {
+                compressor.warn("Condition always true [{file}:{line},{col}]", self.start);
+                return self.consequent;
+            } else {
+                compressor.warn("Condition always false [{file}:{line},{col}]", self.start);
+                return self.alternative;
+            }
+        }
+        var negated = cond[0].negate(compressor);
+        if (best_of(cond[0], negated) === negated) {
+            self = make_node(AST_Conditional, self, {
+                condition: negated,
+                consequent: self.alternative,
+                alternative: self.consequent
+            });
+        }
+        var consequent = self.consequent;
+        var alternative = self.alternative;
+        if (consequent instanceof AST_Assign
+            && alternative instanceof AST_Assign
+            && consequent.operator == alternative.operator
+            && consequent.left.equivalent_to(alternative.left)
+           ) {
+            /*
+             * Stuff like this:
+             * if (foo) exp = something; else exp = something_else;
+             * ==>
+             * exp = foo ? something : something_else;
+             */
+            return make_node(AST_Assign, self, {
+                operator: consequent.operator,
+                left: consequent.left,
+                right: make_node(AST_Conditional, self, {
+                    condition: self.condition,
+                    consequent: consequent.right,
+                    alternative: alternative.right
+                })
+            });
+        }
+        if (consequent instanceof AST_Call
+            && alternative.TYPE === consequent.TYPE
+            && consequent.args.length == alternative.args.length
+            && consequent.expression.equivalent_to(alternative.expression)) {
+            if (consequent.args.length == 0) {
+                return make_node(AST_Seq, self, {
+                    car: self.condition,
+                    cdr: consequent
                 });
             }
-        };
-        function From_Moz_Unary(M) {
-            return new (M.prefix ? AST_UnaryPrefix : AST_UnaryPostfix)({
-                start: my_start_token(M),
-                end: my_end_token(M),
-                operator: M.operator,
-                expression: from_moz(M.argument)
-            });
+            if (consequent.args.length == 1) {
+                consequent.args[0] = make_node(AST_Conditional, self, {
+                    condition: self.condition,
+                    consequent: consequent.args[0],
+                    alternative: alternative.args[0]
+                });
+                return consequent;
+            }
         }
-        var ME_TO_MOZ = {};
-        map("Node", AST_Node);
-        map("Program", AST_Toplevel, "body@body");
-        map("Function", AST_Function, "id>name, params@argnames, body%body");
-        map("EmptyStatement", AST_EmptyStatement);
-        map("BlockStatement", AST_BlockStatement, "body@body");
-        map("ExpressionStatement", AST_SimpleStatement, "expression>body");
-        map("IfStatement", AST_If, "test>condition, consequent>body, alternate>alternative");
-        map("LabeledStatement", AST_LabeledStatement, "label>label, body>body");
-        map("BreakStatement", AST_Break, "label>label");
-        map("ContinueStatement", AST_Continue, "label>label");
-        map("WithStatement", AST_With, "object>expression, body>body");
-        map("SwitchStatement", AST_Switch, "discriminant>expression, cases@body");
-        map("ReturnStatement", AST_Return, "argument>value");
-        map("ThrowStatement", AST_Throw, "argument>value");
-        map("WhileStatement", AST_While, "test>condition, body>body");
-        map("DoWhileStatement", AST_Do, "test>condition, body>body");
-        map("ForStatement", AST_For, "init>init, test>condition, update>step, body>body");
-        map("ForInStatement", AST_ForIn, "left>init, right>object, body>body");
-        map("DebuggerStatement", AST_Debugger);
-        map("FunctionDeclaration", AST_Defun, "id>name, params@argnames, body%body");
-        map("VariableDeclaration", AST_Var, "declarations@definitions");
-        map("VariableDeclarator", AST_VarDef, "id>name, init>value");
-        map("ThisExpression", AST_This);
-        map("ArrayExpression", AST_Array, "elements@elements");
-        map("FunctionExpression", AST_Function, "id>name, params@argnames, body%body");
-        map("BinaryExpression", AST_Binary, "operator=operator, left>left, right>right");
-        map("AssignmentExpression", AST_Assign, "operator=operator, left>left, right>right");
-        map("LogicalExpression", AST_Binary, "operator=operator, left>left, right>right");
-        map("ConditionalExpression", AST_Conditional, "test>condition, consequent>consequent, alternate>alternative");
-        map("NewExpression", AST_New, "callee>expression, arguments@args");
-        map("CallExpression", AST_Call, "callee>expression, arguments@args");
-        function my_start_token(moznode) {
-            return new AST_Token({
-                file: moznode.loc && moznode.loc.source,
-                line: moznode.loc && moznode.loc.start.line,
-                col: moznode.loc && moznode.loc.start.column,
-                pos: moznode.start,
-                endpos: moznode.start
-            });
-        }
-        function my_end_token(moznode) {
-            return new AST_Token({
-                file: moznode.loc && moznode.loc.source,
-                line: moznode.loc && moznode.loc.end.line,
-                col: moznode.loc && moznode.loc.end.column,
-                pos: moznode.end,
-                endpos: moznode.end
-            });
-        }
-        function map(moztype, mytype, propmap) {
-            var moz_to_me = "function From_Moz_" + moztype + "(M){\n";
-            moz_to_me += "return new mytype({\n" + "start: my_start_token(M),\n" + "end: my_end_token(M)";
-            if (propmap) propmap.split(/\s*,\s*/).forEach(function(prop) {
-                var m = /([a-z0-9$_]+)(=|@|>|%)([a-z0-9$_]+)/i.exec(prop);
-                if (!m) throw new Error("Can't understand property map: " + prop);
-                var moz = "M." + m[1], how = m[2], my = m[3];
-                moz_to_me += ",\n" + my + ": ";
-                if (how == "@") {
-                    moz_to_me += moz + ".map(from_moz)";
-                } else if (how == ">") {
-                    moz_to_me += "from_moz(" + moz + ")";
-                } else if (how == "=") {
-                    moz_to_me += moz;
-                } else if (how == "%") {
-                    moz_to_me += "from_moz(" + moz + ").body";
-                } else throw new Error("Can't understand operator in propmap: " + prop);
-            });
-            moz_to_me += "\n})}";
-            moz_to_me = new Function("mytype", "my_start_token", "my_end_token", "from_moz", "return(" + moz_to_me + ")")(mytype, my_start_token, my_end_token, from_moz);
-            return MOZ_TO_ME[moztype] = moz_to_me;
-        }
-        var FROM_MOZ_STACK = null;
-        function from_moz(node) {
-            FROM_MOZ_STACK.push(node);
-            var ret = node != null ? MOZ_TO_ME[node.type](node) : null;
-            FROM_MOZ_STACK.pop();
-            return ret;
-        }
-        AST_Node.from_mozilla_ast = function(node) {
-            var save_stack = FROM_MOZ_STACK;
-            FROM_MOZ_STACK = [];
-            var ast = from_moz(node);
-            FROM_MOZ_STACK = save_stack;
-            return ast;
-        };
-    })();
-    exports["array_to_hash"] = array_to_hash;
-    exports["slice"] = slice;
-    exports["characters"] = characters;
-    exports["member"] = member;
-    exports["find_if"] = find_if;
-    exports["repeat_string"] = repeat_string;
-    exports["DefaultsError"] = DefaultsError;
-    exports["defaults"] = defaults;
-    exports["merge"] = merge;
-    exports["noop"] = noop;
-    exports["MAP"] = MAP;
-    exports["push_uniq"] = push_uniq;
-    exports["string_template"] = string_template;
-    exports["remove"] = remove;
-    exports["mergeSort"] = mergeSort;
-    exports["set_difference"] = set_difference;
-    exports["set_intersection"] = set_intersection;
-    exports["makePredicate"] = makePredicate;
-    exports["Dictionary"] = Dictionary;
-    exports["DEFNODE"] = DEFNODE;
-    exports["AST_Token"] = AST_Token;
-    exports["AST_Node"] = AST_Node;
-    exports["AST_Statement"] = AST_Statement;
-    exports["AST_Debugger"] = AST_Debugger;
-    exports["AST_Directive"] = AST_Directive;
-    exports["AST_SimpleStatement"] = AST_SimpleStatement;
-    exports["walk_body"] = walk_body;
-    exports["AST_Block"] = AST_Block;
-    exports["AST_BlockStatement"] = AST_BlockStatement;
-    exports["AST_EmptyStatement"] = AST_EmptyStatement;
-    exports["AST_StatementWithBody"] = AST_StatementWithBody;
-    exports["AST_LabeledStatement"] = AST_LabeledStatement;
-    exports["AST_DWLoop"] = AST_DWLoop;
-    exports["AST_Do"] = AST_Do;
-    exports["AST_While"] = AST_While;
-    exports["AST_For"] = AST_For;
-    exports["AST_ForIn"] = AST_ForIn;
-    exports["AST_With"] = AST_With;
-    exports["AST_Scope"] = AST_Scope;
-    exports["AST_Toplevel"] = AST_Toplevel;
-    exports["AST_Lambda"] = AST_Lambda;
-    exports["AST_Accessor"] = AST_Accessor;
-    exports["AST_Function"] = AST_Function;
-    exports["AST_Defun"] = AST_Defun;
-    exports["AST_Jump"] = AST_Jump;
-    exports["AST_Exit"] = AST_Exit;
-    exports["AST_Return"] = AST_Return;
-    exports["AST_Throw"] = AST_Throw;
-    exports["AST_LoopControl"] = AST_LoopControl;
-    exports["AST_Break"] = AST_Break;
-    exports["AST_Continue"] = AST_Continue;
-    exports["AST_If"] = AST_If;
-    exports["AST_Switch"] = AST_Switch;
-    exports["AST_SwitchBranch"] = AST_SwitchBranch;
-    exports["AST_Default"] = AST_Default;
-    exports["AST_Case"] = AST_Case;
-    exports["AST_Try"] = AST_Try;
-    exports["AST_Catch"] = AST_Catch;
-    exports["AST_Finally"] = AST_Finally;
-    exports["AST_Definitions"] = AST_Definitions;
-    exports["AST_Var"] = AST_Var;
-    exports["AST_Const"] = AST_Const;
-    exports["AST_VarDef"] = AST_VarDef;
-    exports["AST_Call"] = AST_Call;
-    exports["AST_New"] = AST_New;
-    exports["AST_Seq"] = AST_Seq;
-    exports["AST_PropAccess"] = AST_PropAccess;
-    exports["AST_Dot"] = AST_Dot;
-    exports["AST_Sub"] = AST_Sub;
-    exports["AST_Unary"] = AST_Unary;
-    exports["AST_UnaryPrefix"] = AST_UnaryPrefix;
-    exports["AST_UnaryPostfix"] = AST_UnaryPostfix;
-    exports["AST_Binary"] = AST_Binary;
-    exports["AST_Conditional"] = AST_Conditional;
-    exports["AST_Assign"] = AST_Assign;
-    exports["AST_Array"] = AST_Array;
-    exports["AST_Object"] = AST_Object;
-    exports["AST_ObjectProperty"] = AST_ObjectProperty;
-    exports["AST_ObjectKeyVal"] = AST_ObjectKeyVal;
-    exports["AST_ObjectSetter"] = AST_ObjectSetter;
-    exports["AST_ObjectGetter"] = AST_ObjectGetter;
-    exports["AST_Symbol"] = AST_Symbol;
-    exports["AST_SymbolAccessor"] = AST_SymbolAccessor;
-    exports["AST_SymbolDeclaration"] = AST_SymbolDeclaration;
-    exports["AST_SymbolVar"] = AST_SymbolVar;
-    exports["AST_SymbolConst"] = AST_SymbolConst;
-    exports["AST_SymbolFunarg"] = AST_SymbolFunarg;
-    exports["AST_SymbolDefun"] = AST_SymbolDefun;
-    exports["AST_SymbolLambda"] = AST_SymbolLambda;
-    exports["AST_SymbolCatch"] = AST_SymbolCatch;
-    exports["AST_Label"] = AST_Label;
-    exports["AST_SymbolRef"] = AST_SymbolRef;
-    exports["AST_LabelRef"] = AST_LabelRef;
-    exports["AST_This"] = AST_This;
-    exports["AST_Constant"] = AST_Constant;
-    exports["AST_String"] = AST_String;
-    exports["AST_Number"] = AST_Number;
-    exports["AST_RegExp"] = AST_RegExp;
-    exports["AST_Atom"] = AST_Atom;
-    exports["AST_Null"] = AST_Null;
-    exports["AST_NaN"] = AST_NaN;
-    exports["AST_Undefined"] = AST_Undefined;
-    exports["AST_Infinity"] = AST_Infinity;
-    exports["AST_Boolean"] = AST_Boolean;
-    exports["AST_False"] = AST_False;
-    exports["AST_True"] = AST_True;
-    exports["TreeWalker"] = TreeWalker;
-    exports["KEYWORDS"] = KEYWORDS;
-    exports["KEYWORDS_ATOM"] = KEYWORDS_ATOM;
-    exports["RESERVED_WORDS"] = RESERVED_WORDS;
-    exports["KEYWORDS_BEFORE_EXPRESSION"] = KEYWORDS_BEFORE_EXPRESSION;
-    exports["OPERATOR_CHARS"] = OPERATOR_CHARS;
-    exports["RE_HEX_NUMBER"] = RE_HEX_NUMBER;
-    exports["RE_OCT_NUMBER"] = RE_OCT_NUMBER;
-    exports["RE_DEC_NUMBER"] = RE_DEC_NUMBER;
-    exports["OPERATORS"] = OPERATORS;
-    exports["WHITESPACE_CHARS"] = WHITESPACE_CHARS;
-    exports["PUNC_BEFORE_EXPRESSION"] = PUNC_BEFORE_EXPRESSION;
-    exports["PUNC_CHARS"] = PUNC_CHARS;
-    exports["REGEXP_MODIFIERS"] = REGEXP_MODIFIERS;
-    exports["UNICODE"] = UNICODE;
-    exports["is_letter"] = is_letter;
-    exports["is_digit"] = is_digit;
-    exports["is_alphanumeric_char"] = is_alphanumeric_char;
-    exports["is_unicode_combining_mark"] = is_unicode_combining_mark;
-    exports["is_unicode_connector_punctuation"] = is_unicode_connector_punctuation;
-    exports["is_identifier"] = is_identifier;
-    exports["is_identifier_start"] = is_identifier_start;
-    exports["is_identifier_char"] = is_identifier_char;
-    exports["parse_js_number"] = parse_js_number;
-    exports["JS_Parse_Error"] = JS_Parse_Error;
-    exports["js_error"] = js_error;
-    exports["is_token"] = is_token;
-    exports["EX_EOF"] = EX_EOF;
-    exports["tokenizer"] = tokenizer;
-    exports["UNARY_PREFIX"] = UNARY_PREFIX;
-    exports["UNARY_POSTFIX"] = UNARY_POSTFIX;
-    exports["ASSIGNMENT"] = ASSIGNMENT;
-    exports["PRECEDENCE"] = PRECEDENCE;
-    exports["STATEMENTS_WITH_LABELS"] = STATEMENTS_WITH_LABELS;
-    exports["ATOMIC_START_TOKEN"] = ATOMIC_START_TOKEN;
-    exports["parse"] = parse;
-    exports["TreeTransformer"] = TreeTransformer;
-    exports["SymbolDef"] = SymbolDef;
-    exports["base54"] = base54;
-    exports["OutputStream"] = OutputStream;
-    exports["Compressor"] = Compressor;
-    exports["SourceMap"] = SourceMap;
-})({}, function() {
-    return exports;
-}());
+        return self;
+    });
 
-var UglifyJS = exports.UglifyJS;
+    OPT(AST_Boolean, function(self, compressor){
+        if (compressor.option("booleans")) {
+            var p = compressor.parent();
+            if (p instanceof AST_Binary && (p.operator == "=="
+                                            || p.operator == "!=")) {
+                compressor.warn("Non-strict equality against boolean: {operator} {value} [{file}:{line},{col}]", {
+                    operator : p.operator,
+                    value    : self.value,
+                    file     : p.start.file,
+                    line     : p.start.line,
+                    col      : p.start.col,
+                });
+                return make_node(AST_Number, self, {
+                    value: +self.value
+                });
+            }
+            return make_node(AST_UnaryPrefix, self, {
+                operator: "!",
+                expression: make_node(AST_Number, self, {
+                    value: 1 - self.value
+                })
+            });
+        }
+        return self;
+    });
 
-UglifyJS.AST_Node.warn_function = function(txt) {
-    logger.error("uglifyjs2 WARN: " + txt);
+    OPT(AST_Sub, function(self, compressor){
+        var prop = self.property;
+        if (prop instanceof AST_String && compressor.option("properties")) {
+            prop = prop.getValue();
+            if (RESERVED_WORDS(prop) ? compressor.option("screw_ie8") : is_identifier_string(prop)) {
+                return make_node(AST_Dot, self, {
+                    expression : self.expression,
+                    property   : prop
+                });
+            }
+            var v = parseFloat(prop);
+            if (!isNaN(v) && v.toString() == prop) {
+                self.property = make_node(AST_Number, self.property, {
+                    value: v
+                });
+            }
+        }
+        return self;
+    });
+
+    function literals_in_boolean_context(self, compressor) {
+        if (compressor.option("booleans") && compressor.in_boolean_context()) {
+            return make_node(AST_True, self);
+        }
+        return self;
+    };
+    OPT(AST_Array, literals_in_boolean_context);
+    OPT(AST_Object, literals_in_boolean_context);
+    OPT(AST_RegExp, literals_in_boolean_context);
+
+})();
+
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+// a small wrapper around fitzgen's source-map library
+function SourceMap(options) {
+    options = defaults(options, {
+        file : null,
+        root : null,
+        orig : null,
+
+        orig_line_diff : 0,
+        dest_line_diff : 0,
+    });
+    var generator = new MOZ_SourceMap.SourceMapGenerator({
+        file       : options.file,
+        sourceRoot : options.root
+    });
+    var orig_map = options.orig && new MOZ_SourceMap.SourceMapConsumer(options.orig);
+    function add(source, gen_line, gen_col, orig_line, orig_col, name) {
+        if (orig_map) {
+            var info = orig_map.originalPositionFor({
+                line: orig_line,
+                column: orig_col
+            });
+            source = info.source;
+            orig_line = info.line;
+            orig_col = info.column;
+            name = info.name;
+        }
+        generator.addMapping({
+            generated : { line: gen_line + options.dest_line_diff, column: gen_col },
+            original  : { line: orig_line + options.orig_line_diff, column: orig_col },
+            source    : source,
+            name      : name
+        });
+    };
+    return {
+        add        : add,
+        get        : function() { return generator },
+        toString   : function() { return generator.toString() }
+    };
 };
 
-//JRB: MODIFIED FROM UGLIFY SOURCE
-//to take a name for the file, and then set toplevel.filename to be that name.
+/***********************************************************************
+
+  A JavaScript tokenizer / parser / beautifier / compressor.
+  https://github.com/mishoo/UglifyJS2
+
+  -------------------------------- (C) ---------------------------------
+
+                           Author: Mihai Bazon
+                         <mihai.bazon@gmail.com>
+                       http://mihai.bazon.net/blog
+
+  Distributed under the BSD license:
+
+    Copyright 2012 (c) Mihai Bazon <mihai.bazon@gmail.com>
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above
+          copyright notice, this list of conditions and the following
+          disclaimer.
+
+        * Redistributions in binary form must reproduce the above
+          copyright notice, this list of conditions and the following
+          disclaimer in the documentation and/or other materials
+          provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER â€œAS ISâ€ AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+ ***********************************************************************/
+
+"use strict";
+
+(function(){
+
+    var MOZ_TO_ME = {
+        TryStatement : function(M) {
+            return new AST_Try({
+                start    : my_start_token(M),
+                end      : my_end_token(M),
+                body     : from_moz(M.block).body,
+                bcatch   : from_moz(M.handlers[0]),
+                bfinally : M.finalizer ? new AST_Finally(from_moz(M.finalizer)) : null
+            });
+        },
+        CatchClause : function(M) {
+            return new AST_Catch({
+                start   : my_start_token(M),
+                end     : my_end_token(M),
+                argname : from_moz(M.param),
+                body    : from_moz(M.body).body
+            });
+        },
+        ObjectExpression : function(M) {
+            return new AST_Object({
+                start      : my_start_token(M),
+                end        : my_end_token(M),
+                properties : M.properties.map(function(prop){
+                    var key = prop.key;
+                    var name = key.type == "Identifier" ? key.name : key.value;
+                    var args = {
+                        start    : my_start_token(key),
+                        end      : my_end_token(prop.value),
+                        key      : name,
+                        value    : from_moz(prop.value)
+                    };
+                    switch (prop.kind) {
+                      case "init":
+                        return new AST_ObjectKeyVal(args);
+                      case "set":
+                        args.value.name = from_moz(key);
+                        return new AST_ObjectSetter(args);
+                      case "get":
+                        args.value.name = from_moz(key);
+                        return new AST_ObjectGetter(args);
+                    }
+                })
+            });
+        },
+        SequenceExpression : function(M) {
+            return AST_Seq.from_array(M.expressions.map(from_moz));
+        },
+        MemberExpression : function(M) {
+            return new (M.computed ? AST_Sub : AST_Dot)({
+                start      : my_start_token(M),
+                end        : my_end_token(M),
+                property   : M.computed ? from_moz(M.property) : M.property.name,
+                expression : from_moz(M.object)
+            });
+        },
+        SwitchCase : function(M) {
+            return new (M.test ? AST_Case : AST_Default)({
+                start      : my_start_token(M),
+                end        : my_end_token(M),
+                expression : from_moz(M.test),
+                body       : M.consequent.map(from_moz)
+            });
+        },
+        Literal : function(M) {
+            var val = M.value, args = {
+                start  : my_start_token(M),
+                end    : my_end_token(M)
+            };
+            if (val === null) return new AST_Null(args);
+            switch (typeof val) {
+              case "string":
+                args.value = val;
+                return new AST_String(args);
+              case "number":
+                args.value = val;
+                return new AST_Number(args);
+              case "boolean":
+                return new (val ? AST_True : AST_False)(args);
+              default:
+                args.value = val;
+                return new AST_RegExp(args);
+            }
+        },
+        UnaryExpression: From_Moz_Unary,
+        UpdateExpression: From_Moz_Unary,
+        Identifier: function(M) {
+            var p = FROM_MOZ_STACK[FROM_MOZ_STACK.length - 2];
+            return new (M.name == "this" ? AST_This
+                        : p.type == "LabeledStatement" ? AST_Label
+                        : p.type == "VariableDeclarator" && p.id === M ? (p.kind == "const" ? AST_SymbolConst : AST_SymbolVar)
+                        : p.type == "FunctionExpression" ? (p.id === M ? AST_SymbolLambda : AST_SymbolFunarg)
+                        : p.type == "FunctionDeclaration" ? (p.id === M ? AST_SymbolDefun : AST_SymbolFunarg)
+                        : p.type == "CatchClause" ? AST_SymbolCatch
+                        : p.type == "BreakStatement" || p.type == "ContinueStatement" ? AST_LabelRef
+                        : AST_SymbolRef)({
+                            start : my_start_token(M),
+                            end   : my_end_token(M),
+                            name  : M.name
+                        });
+        }
+    };
+
+    function From_Moz_Unary(M) {
+        var prefix = "prefix" in M ? M.prefix
+            : M.type == "UnaryExpression" ? true : false;
+        return new (prefix ? AST_UnaryPrefix : AST_UnaryPostfix)({
+            start      : my_start_token(M),
+            end        : my_end_token(M),
+            operator   : M.operator,
+            expression : from_moz(M.argument)
+        });
+    };
+
+    var ME_TO_MOZ = {};
+
+    map("Node", AST_Node);
+    map("Program", AST_Toplevel, "body@body");
+    map("Function", AST_Function, "id>name, params@argnames, body%body");
+    map("EmptyStatement", AST_EmptyStatement);
+    map("BlockStatement", AST_BlockStatement, "body@body");
+    map("ExpressionStatement", AST_SimpleStatement, "expression>body");
+    map("IfStatement", AST_If, "test>condition, consequent>body, alternate>alternative");
+    map("LabeledStatement", AST_LabeledStatement, "label>label, body>body");
+    map("BreakStatement", AST_Break, "label>label");
+    map("ContinueStatement", AST_Continue, "label>label");
+    map("WithStatement", AST_With, "object>expression, body>body");
+    map("SwitchStatement", AST_Switch, "discriminant>expression, cases@body");
+    map("ReturnStatement", AST_Return, "argument>value");
+    map("ThrowStatement", AST_Throw, "argument>value");
+    map("WhileStatement", AST_While, "test>condition, body>body");
+    map("DoWhileStatement", AST_Do, "test>condition, body>body");
+    map("ForStatement", AST_For, "init>init, test>condition, update>step, body>body");
+    map("ForInStatement", AST_ForIn, "left>init, right>object, body>body");
+    map("DebuggerStatement", AST_Debugger);
+    map("FunctionDeclaration", AST_Defun, "id>name, params@argnames, body%body");
+    map("VariableDeclaration", AST_Var, "declarations@definitions");
+    map("VariableDeclarator", AST_VarDef, "id>name, init>value");
+
+    map("ThisExpression", AST_This);
+    map("ArrayExpression", AST_Array, "elements@elements");
+    map("FunctionExpression", AST_Function, "id>name, params@argnames, body%body");
+    map("BinaryExpression", AST_Binary, "operator=operator, left>left, right>right");
+    map("AssignmentExpression", AST_Assign, "operator=operator, left>left, right>right");
+    map("LogicalExpression", AST_Binary, "operator=operator, left>left, right>right");
+    map("ConditionalExpression", AST_Conditional, "test>condition, consequent>consequent, alternate>alternative");
+    map("NewExpression", AST_New, "callee>expression, arguments@args");
+    map("CallExpression", AST_Call, "callee>expression, arguments@args");
+
+    /* -----[ tools ]----- */
+
+    function my_start_token(moznode) {
+        return new AST_Token({
+            file   : moznode.loc && moznode.loc.source,
+            line   : moznode.loc && moznode.loc.start.line,
+            col    : moznode.loc && moznode.loc.start.column,
+            pos    : moznode.start,
+            endpos : moznode.start
+        });
+    };
+
+    function my_end_token(moznode) {
+        return new AST_Token({
+            file   : moznode.loc && moznode.loc.source,
+            line   : moznode.loc && moznode.loc.end.line,
+            col    : moznode.loc && moznode.loc.end.column,
+            pos    : moznode.end,
+            endpos : moznode.end
+        });
+    };
+
+    function map(moztype, mytype, propmap) {
+        var moz_to_me = "function From_Moz_" + moztype + "(M){\n";
+        moz_to_me += "return new mytype({\n" +
+            "start: my_start_token(M),\n" +
+            "end: my_end_token(M)";
+
+        if (propmap) propmap.split(/\s*,\s*/).forEach(function(prop){
+            var m = /([a-z0-9$_]+)(=|@|>|%)([a-z0-9$_]+)/i.exec(prop);
+            if (!m) throw new Error("Can't understand property map: " + prop);
+            var moz = "M." + m[1], how = m[2], my = m[3];
+            moz_to_me += ",\n" + my + ": ";
+            if (how == "@") {
+                moz_to_me += moz + ".map(from_moz)";
+            } else if (how == ">") {
+                moz_to_me += "from_moz(" + moz + ")";
+            } else if (how == "=") {
+                moz_to_me += moz;
+            } else if (how == "%") {
+                moz_to_me += "from_moz(" + moz + ").body";
+            } else throw new Error("Can't understand operator in propmap: " + prop);
+        });
+        moz_to_me += "\n})}";
+
+        // moz_to_me = parse(moz_to_me).print_to_string({ beautify: true });
+        // console.log(moz_to_me);
+
+        moz_to_me = new Function("mytype", "my_start_token", "my_end_token", "from_moz", "return(" + moz_to_me + ")")(
+            mytype, my_start_token, my_end_token, from_moz
+        );
+        return MOZ_TO_ME[moztype] = moz_to_me;
+    };
+
+    var FROM_MOZ_STACK = null;
+
+    function from_moz(node) {
+        FROM_MOZ_STACK.push(node);
+        var ret = node != null ? MOZ_TO_ME[node.type](node) : null;
+        FROM_MOZ_STACK.pop();
+        return ret;
+    };
+
+    AST_Node.from_mozilla_ast = function(node){
+        var save_stack = FROM_MOZ_STACK;
+        FROM_MOZ_STACK = [];
+        var ast = from_moz(node);
+        FROM_MOZ_STACK = save_stack;
+        return ast;
+    };
+
+})();
+
+AST_Node.warn_function = function(txt) { logger.error("uglifyjs2 WARN: " + txt); };
 exports.minify = function(files, options, name) {
-    options = UglifyJS.defaults(options, {
+    options = defaults(options, {
+        spidermonkey : false,
         outSourceMap : null,
         sourceRoot   : null,
         inSourceMap  : null,
         fromString   : false,
         warnings     : false,
+        mangle       : {},
+        output       : null,
+        compress     : {}
     });
-    if (typeof files == "string")
-        files = [ files ];
+    base54.reset();
 
     // 1. parse
     var toplevel = null;
-    files.forEach(function(file){
-        var code = options.fromString
-            ? file
-            : fs.readFileSync(file, "utf8");
-        toplevel = UglifyJS.parse(code, {
-            filename: options.fromString ? name : file,
-            toplevel: toplevel
+
+    if (options.spidermonkey) {
+        toplevel = AST_Node.from_mozilla_ast(files);
+    } else {
+        if (typeof files == "string")
+            files = [ files ];
+        files.forEach(function(file){
+            var code = options.fromString
+                ? file
+                : rjsFile.readFile(file, "utf8");
+            toplevel = parse(code, {
+                filename: options.fromString ? name : file,
+                toplevel: toplevel
+            });
         });
-    });
+    }
 
     // 2. compress
-    toplevel.figure_out_scope();
-    var sq = UglifyJS.Compressor({
-        warnings: options.warnings,
-    });
-    toplevel = toplevel.transform(sq);
+    if (options.compress) {
+        var compress = { warnings: options.warnings };
+        merge(compress, options.compress);
+        toplevel.figure_out_scope();
+        var sq = Compressor(compress);
+        toplevel = toplevel.transform(sq);
+    }
 
     // 3. mangle
-    toplevel.figure_out_scope();
-    toplevel.compute_char_frequency();
-    toplevel.mangle_names();
+    if (options.mangle) {
+        toplevel.figure_out_scope();
+        toplevel.compute_char_frequency();
+        toplevel.mangle_names(options.mangle);
+    }
 
     // 4. output
-    var map = null;
-    var inMap = null;
-    if (options.inSourceMap) {
-        inMap = fs.readFileSync(options.inSourceMap, "utf8");
+    var inMap = options.inSourceMap;
+    var output = {};
+    if (typeof options.inSourceMap == "string") {
+        inMap = rjsFile.readFile(options.inSourceMap, "utf8");
     }
-    if (options.outSourceMap) map = UglifyJS.SourceMap({
-        file: options.outSourceMap,
-        orig: inMap,
-        root: options.sourceRoot
-    });
-    var stream = UglifyJS.OutputStream({ source_map: map });
+    if (options.outSourceMap) {
+        output.source_map = SourceMap({
+            file: options.outSourceMap,
+            orig: inMap,
+            root: options.sourceRoot
+        });
+    }
+    if (options.output) {
+        merge(output, options.output);
+    }
+    var stream = OutputStream(output);
     toplevel.print(stream);
     return {
         code : stream + "",
-        map  : map + ""
+        map  : output.source_map + ""
     };
 };
 
@@ -19141,11 +22652,11 @@ exports.minify = function(files, options, name) {
 //         if (ctor.SUBCLASSES.length > 0) ret.sub = sub;
 //         return ret;
 //     }
-//     return doitem(UglifyJS.AST_Node).sub;
+//     return doitem(AST_Node).sub;
 // }
 
 exports.describe_ast = function() {
-    var out = UglifyJS.OutputStream({ beautify: true });
+    var out = OutputStream({ beautify: true });
     function doitem(ctor) {
         out.print("AST_" + ctor.TYPE);
         var props = ctor.SELF_PROPS.filter(function(prop){
@@ -19175,13 +22686,14 @@ exports.describe_ast = function() {
             });
         }
     };
-    doitem(UglifyJS.AST_Node);
+    doitem(AST_Node);
     return out + "";
 };
 
+
 });
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -19189,13 +22701,24 @@ exports.describe_ast = function() {
 /*jslint plusplus: true */
 /*global define: false */
 
-define('parse', ['./esprima'], function (esprima) {
+define('parse', ['./esprimaAdapter', 'lang'], function (esprima, lang) {
     'use strict';
 
-    var ostring = Object.prototype.toString,
-        //This string is saved off because JSLint complains
-        //about obj.arguments use, as 'reserved word'
-        argPropName = 'arguments';
+    function arrayToString(ary) {
+        var output = '[';
+        if (ary) {
+            ary.forEach(function (item, i) {
+                output += (i > 0 ? ',' : '') + '"' + lang.jsEscape(item) + '"';
+            });
+        }
+        output += ']';
+
+        return output;
+    }
+
+    //This string is saved off because JSLint complains
+    //about obj.arguments use, as 'reserved word'
+    var argPropName = 'arguments';
 
     //From an esprima example for traversing its ast.
     function traverse(object, visitor) {
@@ -19220,6 +22743,28 @@ define('parse', ['./esprima'], function (esprima) {
         }
     }
 
+    //Like traverse, but visitor returning false just
+    //stops that subtree analysis, not the rest of tree
+    //visiting.
+    function traverseBroad(object, visitor) {
+        var key, child;
+
+        if (!object) {
+            return;
+        }
+
+        if (visitor.call(null, object) === false) {
+            return false;
+        }
+        for (key in object) {
+            if (object.hasOwnProperty(key)) {
+                child = object[key];
+                if (typeof child === 'object' && child !== null) {
+                    traverseBroad(child, visitor);
+                }
+            }
+        }
+    }
 
     /**
      * Pulls out dependencies from an array literal with just string members.
@@ -19319,8 +22864,7 @@ define('parse', ['./esprima'], function (esprima) {
                     moduleDeps = [];
                 }
 
-                depString = moduleCall.deps.length ? '["' +
-                            moduleCall.deps.join('","') + '"]' : '[]';
+                depString = arrayToString(moduleCall.deps);
                 result += 'define("' + moduleCall.name + '",' +
                           depString + ');';
             }
@@ -19328,14 +22872,16 @@ define('parse', ['./esprima'], function (esprima) {
                 if (result) {
                     result += '\n';
                 }
-                depString = moduleDeps.length ? '["' + moduleDeps.join('","') +
-                            '"]' : '[]';
+                depString = arrayToString(moduleDeps);
                 result += 'define("' + moduleName + '",' + depString + ');';
             }
         }
 
         return result || null;
     }
+
+    parse.traverse = traverse;
+    parse.traverseBroad = traverseBroad;
 
     /**
      * Handles parsing a file recursively for require calls.
@@ -19409,12 +22955,14 @@ define('parse', ['./esprima'], function (esprima) {
      * will be added to a modified define() call that lists the dependencies
      * on the outside of the function.
      * @param {String} fileName
-     * @param {String} fileContents
+     * @param {String|Object} fileContents: a string of contents, or an already
+     * parsed AST tree.
      * @returns {Array} an array of module names that are dependencies. Always
      * returns an array, but could be of length zero.
      */
     parse.getAnonDeps = function (fileName, fileContents) {
-        var astRoot = esprima.parse(fileContents),
+        var astRoot = typeof fileContents === 'string' ?
+                      esprima.parse(fileContents) : fileContents,
             defFunc = this.findAnonDefineFactory(astRoot);
 
         return parse.getAnonDepsFromNode(defFunc);
@@ -19446,6 +22994,12 @@ define('parse', ['./esprima'], function (esprima) {
         return deps;
     };
 
+    parse.isDefineNodeWithArgs = function (node) {
+        return node && node.type === 'CallExpression' &&
+               node.callee && node.callee.type === 'Identifier' &&
+               node.callee.name === 'define' && node[argPropName];
+    };
+
     /**
      * Finds the function in define(function (require, exports, module){});
      * @param {Array} node
@@ -19457,9 +23011,7 @@ define('parse', ['./esprima'], function (esprima) {
         traverse(node, function (node) {
             var arg0, arg1;
 
-            if (node && node.type === 'CallExpression' &&
-                    node.callee && node.callee.type === 'Identifier' &&
-                    node.callee.name === 'define' && node[argPropName]) {
+            if (parse.isDefineNodeWithArgs(node)) {
 
                 //Just the factory function passed to define
                 arg0 = node[argPropName][0];
@@ -19485,24 +23037,26 @@ define('parse', ['./esprima'], function (esprima) {
      * Finds any config that is passed to requirejs. That includes calls to
      * require/requirejs.config(), as well as require({}, ...) and
      * requirejs({}, ...)
-     * @param {String} fileName
      * @param {String} fileContents
      *
-     * @returns {Object} a config object. Will be null if no config.
+     * @returns {Object} a config details object with the following properties:
+     * - config: {Object} the config object found. Can be undefined if no
+     * config found.
+     * - range: {Array} the start index and end index in the contents where
+     * the config was found. Can be undefined if no config found.
      * Can throw an error if the config in the file cannot be evaluated in
      * a build context to valid JavaScript.
      */
-    parse.findConfig = function (fileName, fileContents) {
+    parse.findConfig = function (fileContents) {
         /*jslint evil: true */
-        var jsConfig,
-            foundConfig = null,
+        var jsConfig, foundConfig, stringData, foundRange, quote, quoteMatch,
+            quoteRegExp = /(:\s|\[\s*)(['"])/,
             astRoot = esprima.parse(fileContents, {
-                range: true
+                loc: true
             });
 
         traverse(astRoot, function (node) {
             var arg,
-                c = node && node.callee,
                 requireType = parse.hasRequire(node);
 
             if (requireType && (requireType === 'require' ||
@@ -19513,23 +23067,34 @@ define('parse', ['./esprima'], function (esprima) {
                 arg = node[argPropName] && node[argPropName][0];
 
                 if (arg && arg.type === 'ObjectExpression') {
-                    jsConfig = parse.nodeToString(fileContents, arg);
+                    stringData = parse.nodeToString(fileContents, arg);
+                    jsConfig = stringData.value;
+                    foundRange = stringData.range;
                     return false;
                 }
             } else {
                 arg = parse.getRequireObjectLiteral(node);
                 if (arg) {
-                    jsConfig = parse.nodeToString(fileContents, arg);
+                    stringData = parse.nodeToString(fileContents, arg);
+                    jsConfig = stringData.value;
+                    foundRange = stringData.range;
                     return false;
                 }
             }
         });
 
         if (jsConfig) {
+            // Eval the config
+            quoteMatch = quoteRegExp.exec(jsConfig);
+            quote = (quoteMatch && quoteMatch[2]) || '"';
             foundConfig = eval('(' + jsConfig + ')');
         }
 
-        return foundConfig;
+        return {
+            config: foundConfig,
+            range: foundRange,
+            quote: quote
+        };
     };
 
     /** Returns the node for the object literal assigned to require/requirejs,
@@ -19541,6 +23106,54 @@ define('parse', ['./esprima'], function (esprima) {
                 node.init && node.init.type === 'ObjectExpression') {
             return node.init;
         }
+    };
+
+    /**
+     * Renames require/requirejs/define calls to be ns + '.' + require/requirejs/define
+     * Does *not* do .config calls though. See pragma.namespace for the complete
+     * set of namespace transforms. This function is used because require calls
+     * inside a define() call should not be renamed, so a simple regexp is not
+     * good enough.
+     * @param  {String} fileContents the contents to transform.
+     * @param  {String} ns the namespace, *not* including trailing dot.
+     * @return {String} the fileContents with the namespace applied
+     */
+    parse.renameNamespace = function (fileContents, ns) {
+        var lines,
+            locs = [],
+            astRoot = esprima.parse(fileContents, {
+                loc: true
+            });
+
+        parse.recurse(astRoot, function (callName, config, name, deps, node) {
+            locs.push(node.loc);
+            //Do not recurse into define functions, they should be using
+            //local defines.
+            return callName !== 'define';
+        }, {});
+
+        if (locs.length) {
+            lines = fileContents.split('\n');
+
+            //Go backwards through the found locs, adding in the namespace name
+            //in front.
+            locs.reverse();
+            locs.forEach(function (loc) {
+                var startIndex = loc.start.column,
+                //start.line is 1-based, not 0 based.
+                lineIndex = loc.start.line - 1,
+                line = lines[lineIndex];
+
+                lines[lineIndex] = line.substring(0, startIndex) +
+                                   ns + '.' +
+                                   line.substring(startIndex,
+                                                      line.length);
+            });
+
+            fileContents = lines.join('\n');
+        }
+
+        return fileContents;
     };
 
     /**
@@ -19569,7 +23182,7 @@ define('parse', ['./esprima'], function (esprima) {
      * Finds only CJS dependencies, ones that are the form
      * require('stringLiteral')
      */
-    parse.findCjsDependencies = function (fileName, fileContents, options) {
+    parse.findCjsDependencies = function (fileName, fileContents) {
         var dependencies = [];
 
         traverse(esprima.parse(fileContents), function (node) {
@@ -19601,6 +23214,15 @@ define('parse', ['./esprima'], function (esprima) {
             node.left && node.left.type === 'MemberExpression' &&
             node.left.object && node.left.object.name === 'define' &&
             node.left.property && node.left.property.name === 'amd';
+    };
+
+    //define.amd reference, as in: if (define.amd)
+    parse.refsDefineAmd = function (node) {
+        return node && node.type === 'MemberExpression' &&
+        node.object && node.object.name === 'define' &&
+        node.object.type === 'Identifier' &&
+        node.property && node.property.name === 'amd' &&
+        node.property.type === 'Identifier';
     };
 
     //require(), requirejs(), require.config() and requirejs.config()
@@ -19636,10 +23258,30 @@ define('parse', ['./esprima'], function (esprima) {
     };
 
     /**
+     * If there is a named define in the file, returns the name. Does not
+     * scan for mulitple names, just the first one.
+     */
+    parse.getNamedDefine = function (fileContents) {
+        var name;
+        traverse(esprima.parse(fileContents), function (node) {
+            if (node && node.type === 'CallExpression' && node.callee &&
+            node.callee.type === 'Identifier' &&
+            node.callee.name === 'define' &&
+            node[argPropName] && node[argPropName][0] &&
+            node[argPropName][0].type === 'Literal') {
+                name = node[argPropName][0].value;
+                return false;
+            }
+        });
+
+        return name;
+    };
+
+    /**
      * Determines if define(), require({}|[]) or requirejs was called in the
      * file. Also finds out if define() is declared and if define.amd is called.
      */
-    parse.usesAmdOrRequireJs = function (fileName, fileContents, options) {
+    parse.usesAmdOrRequireJs = function (fileName, fileContents) {
         var uses;
 
         traverse(esprima.parse(fileContents), function (node) {
@@ -19679,14 +23321,14 @@ define('parse', ['./esprima'], function (esprima) {
      * __dirname, __filename are used. So, not strictly traditional CommonJS,
      * also checks for Node variants.
      */
-    parse.usesCommonJs = function (fileName, fileContents, options) {
+    parse.usesCommonJs = function (fileName, fileContents) {
         var uses = null,
             assignsExports = false;
 
 
         traverse(esprima.parse(fileContents), function (node) {
             var type,
-                exp = node.expression;
+                exp = node.expression || node.init;
 
             if (node.type === 'Identifier' &&
                     (node.name === '__dirname' || node.name === '__filename')) {
@@ -19732,8 +23374,6 @@ define('parse', ['./esprima'], function (esprima) {
 
 
     parse.findRequireDepNames = function (node, deps) {
-        var moduleName, i, n, call, args;
-
         traverse(node, function (node) {
             var arg;
 
@@ -19762,7 +23402,7 @@ define('parse', ['./esprima'], function (esprima) {
      * Otherwise null.
      */
     parse.parseNode = function (node, onMatch) {
-        var name, deps, cjsDeps, arg, factory,
+        var name, deps, cjsDeps, arg, factory, exp, refsDefine, bodyNode,
             args = node && node[argPropName],
             callName = parse.hasRequire(node);
 
@@ -19781,7 +23421,7 @@ define('parse', ['./esprima'], function (esprima) {
                 return;
             }
 
-            return onMatch("require", null, null, deps);
+            return onMatch("require", null, null, deps, node);
         } else if (parse.hasDefine(node) && args && args.length) {
             name = args[0];
             deps = args[1];
@@ -19809,6 +23449,9 @@ define('parse', ['./esprima'], function (esprima) {
                 } else if (deps.type === 'ObjectExpression') {
                     //deps is object literal, null out
                     deps = factory = null;
+                } else if (deps.type === 'Identifier' && args.length === 2) {
+                    // define('id', factory)
+                    deps = factory = null;
                 }
             }
 
@@ -19831,21 +23474,76 @@ define('parse', ['./esprima'], function (esprima) {
                 name = name.value;
             }
 
-            return onMatch("define", null, name, deps);
+            return onMatch("define", null, name, deps, node);
+        } else if (node.type === 'CallExpression' && node.callee &&
+                   node.callee.type === 'FunctionExpression' &&
+                   node.callee.body && node.callee.body.body &&
+                   node.callee.body.body.length === 1 &&
+                   node.callee.body.body[0].type === 'IfStatement') {
+            bodyNode = node.callee.body.body[0];
+            //Look for a define(Identifier) case, but only if inside an
+            //if that has a define.amd test
+            if (bodyNode.consequent && bodyNode.consequent.body) {
+                exp = bodyNode.consequent.body[0];
+                if (exp.type === 'ExpressionStatement' && exp.expression &&
+                    parse.hasDefine(exp.expression) &&
+                    exp.expression.arguments &&
+                    exp.expression.arguments.length === 1 &&
+                    exp.expression.arguments[0].type === 'Identifier') {
+
+                    //Calls define(Identifier) as first statement in body.
+                    //Confirm the if test references define.amd
+                    traverse(bodyNode.test, function (node) {
+                        if (parse.refsDefineAmd(node)) {
+                            refsDefine = true;
+                            return false;
+                        }
+                    });
+
+                    if (refsDefine) {
+                        return onMatch("define", null, null, null, exp.expression);
+                    }
+                }
+            }
         }
     };
 
     /**
      * Converts an AST node into a JS source string by extracting
      * the node's location from the given contents string. Assumes
-     * esprima.parse() with ranges was done.
+     * esprima.parse() with loc was done.
      * @param {String} contents
      * @param {Object} node
      * @returns {String} a JS source string.
      */
     parse.nodeToString = function (contents, node) {
-        var range = node.range;
-        return contents.substring(range[0], range[1]);
+        var extracted,
+            loc = node.loc,
+            lines = contents.split('\n'),
+            firstLine = loc.start.line > 1 ?
+                        lines.slice(0, loc.start.line - 1).join('\n') + '\n' :
+                        '',
+            preamble = firstLine +
+                       lines[loc.start.line - 1].substring(0, loc.start.column);
+
+        if (loc.start.line === loc.end.line) {
+            extracted = lines[loc.start.line - 1].substring(loc.start.column,
+                                                            loc.end.column);
+        } else {
+            extracted =  lines[loc.start.line - 1].substring(loc.start.column) +
+                     '\n' +
+                     lines.slice(loc.start.line, loc.end.line - 1).join('\n') +
+                     '\n' +
+                     lines[loc.end.line - 1].substring(0, loc.end.column);
+        }
+
+        return {
+            value: extracted,
+            range: [
+                preamble.length,
+                preamble.length + extracted.length
+            ]
+        };
     };
 
     /**
@@ -19856,8 +23554,13 @@ define('parse', ['./esprima'], function (esprima) {
      */
     parse.getLicenseComments = function (fileName, contents) {
         var commentNode, refNode, subNode, value, i, j,
+            //xpconnect's Reflect does not support comment or range, but
+            //prefer continued operation vs strict parity of operation,
+            //as license comments can be expressed in other ways, like
+            //via wrap args, or linked via sourcemaps.
             ast = esprima.parse(contents, {
-                comment: true
+                comment: true,
+                range: true
             }),
             result = '',
             existsMap = {},
@@ -19880,7 +23583,7 @@ define('parse', ['./esprima'], function (esprima) {
                         for (j = i + 1; j < ast.comments.length; j++) {
                             subNode = ast.comments[j];
                             if (subNode.type === 'Line' &&
-                                    subNode.range[0] === refNode.range[1]) {
+                                    subNode.range[0] === refNode.range[1] + 1) {
                                 //Adjacent single line comment. Collect it.
                                 value += '//' + subNode.value + lineEnd;
                                 refNode = subNode;
@@ -19916,34 +23619,53 @@ define('parse', ['./esprima'], function (esprima) {
     return parse;
 });
 /**
- * @license Copyright (c) 2012, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2012-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
 
-/*jslint */
 /*global define */
 
-define('transform', [ './esprima', './parse', 'logger', 'lang'], function (esprima, parse, logger, lang) {
+define('transform', [ './esprimaAdapter', './parse', 'logger', 'lang'],
+function (esprima, parse, logger, lang) {
     'use strict';
-    var transform;
+    var transform,
+        baseIndentRegExp = /^([ \t]+)/,
+        indentRegExp = /\{[\r\n]+([ \t]+)/,
+        keyRegExp = /^[_A-Za-z]([A-Za-z\d_]*)$/,
+        bulkIndentRegExps = {
+            '\n': /\n/g,
+            '\r\n': /\r\n/g
+        };
 
-    return (transform = {
+    function applyIndent(str, indent, lineReturn) {
+        var regExp = bulkIndentRegExps[lineReturn];
+        return str.replace(regExp, '$&' + indent);
+    }
+
+    transform = {
         toTransport: function (namespace, moduleName, path, contents, onFound, options) {
             options = options || {};
 
-            var tokens, foundAnon, deps, lastRange, parenCount, inDefine,
+            var astRoot, contentLines, modLine,
+                foundAnon,
                 scanCount = 0,
                 scanReset = false,
-                defineRanges = [],
-                contentInsertion = '',
-                depString = '';
+                defineInfos = [],
+                applySourceUrl = function (contents) {
+                    if (options.useSourceUrl) {
+                        contents = 'eval("' + lang.jsEscape(contents) +
+                            '\\n//# sourceURL=' + (path.indexOf('/') === 0 ? '' : '/') +
+                            path +
+                            '");\n';
+                    }
+                    return contents;
+                };
 
             try {
-                tokens = esprima.parse(contents, {
-                    tokens: true,
-                    range: true
-                }).tokens;
+                astRoot = esprima.parse(contents, {
+                    loc: true
+                });
             } catch (e) {
                 logger.trace('toTransport skipping ' + path + ': ' +
                              e.toString());
@@ -19951,195 +23673,122 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
             }
 
             //Find the define calls and their position in the files.
-            tokens.forEach(function (token, i) {
-                var prev, prev2, next, next2, next3, next4, next5,
-                    needsId, depAction, nameCommaRange, foundId,
+            parse.traverse(astRoot, function (node) {
+                var args, firstArg, firstArgLoc, factoryNode,
+                    needsId, depAction, foundId, init,
                     sourceUrlData, range,
                     namespaceExists = false;
 
-                if (inDefine && token.type === 'Punctuator') {
-                    //Looking for the end of the define call.
-                    if (token.value === '(') {
-                        parenCount += 1;
-                    } else if (token.value === ')') {
-                        parenCount -= 1;
-                    }
-
-                    if (parenCount === 0) {
-                        inDefine = false;
-
-                        //Found the end of the define call. Hold onto
-                        //it.
-                        lastRange = defineRanges.length &&
-                            defineRanges[defineRanges.length - 1];
-                        if (lastRange) {
-                            lastRange.defineEndRange = token.range;
-                        }
+                // If a bundle script with a define declaration, do not
+                // parse any further at this level. Likely a built layer
+                // by some other tool.
+                if (node.type === 'VariableDeclarator' &&
+                    node.id && node.id.name === 'define' &&
+                    node.id.type === 'Identifier') {
+                    init = node.init;
+                    if (init && init.callee &&
+                        init.callee.type === 'CallExpression' &&
+                        init.callee.callee &&
+                        init.callee.callee.type === 'Identifier' &&
+                        init.callee.callee.name === 'require' &&
+                        init.callee.arguments && init.callee.arguments.length === 1 &&
+                        init.callee.arguments[0].type === 'Literal' &&
+                        init.callee.arguments[0].value &&
+                        init.callee.arguments[0].value.indexOf('amdefine') !== -1) {
+                        // the var define = require('amdefine')(module) case,
+                        // keep going in that case.
+                    } else {
+                        return false;
                     }
                 }
 
-                if (token.type === 'Identifier' && token.value === 'define') {
-                    //Possible match. Do not want something.define calls
-                    //though, and only defines follow by a paren
-                    prev = tokens[i - 1];
-                    next = tokens[i + 1];
+                namespaceExists = namespace &&
+                                node.type === 'CallExpression' &&
+                                node.callee  && node.callee.object &&
+                                node.callee.object.type === 'Identifier' &&
+                                node.callee.object.name === namespace &&
+                                node.callee.property.type === 'Identifier' &&
+                                node.callee.property.name === 'define';
 
-                    if (prev && prev.type === 'Punctuator' &&
-                            prev.value === '.') {
-                        //a define on a sub-object, not a top level
-                        //define() call. If the sub object is the
-                        //namespace, then it is ok.
-                        prev2 = tokens[i - 2];
-                        if (!prev2) {
-                            return;
-                        }
-
-                        //If the prev2 does not match namespace, then bail.
-                        if (!namespace || prev2.type !== 'Identifier' ||
-                                prev2.value !== namespace) {
-                            return;
-                        } else if (namespace) {
-                            namespaceExists = true;
-                        }
-                    }
-
-                    if (!next || next.type !== 'Punctuator' ||
-                            next.value !== '(') {
-                       //Not a define() function call. Bail.
+                if (namespaceExists || parse.isDefineNodeWithArgs(node)) {
+                    //The arguments are where its at.
+                    args = node.arguments;
+                    if (!args || !args.length) {
                         return;
                     }
 
-                    next2 = tokens[i + 2];
-                    if (!next2) {
-                        return;
-                    }
+                    firstArg = args[0];
+                    firstArgLoc = firstArg.loc;
 
-                    //Figure out if this needs a named define call.
-                    if (next2.type === 'Punctuator' && next2.value === '[') {
-                        //Dependency array
-                        needsId = true;
-                        depAction = 'skip';
-                    } else if (next2.type === 'Punctuator' &&
-                            next2.value === '{') {
-                        //Object literal
-                        needsId = true;
-                        depAction = 'skip';
-                    } else if (next2.type === 'Keyword' &&
-                               next2.value === 'function') {
-                        //function
-                        needsId = true;
-                        depAction = 'scan';
-                    } else if (next2.type === 'String') {
-                        //Named module
-                        needsId = false;
-
-                        //The value includes the quotes around the string,
-                        //so remove them.
-                        foundId = next2.value.substring(1,
-                                                        next2.value.length - 1);
-
-                        //assumed it does not need dependencies injected
-
-                        //If next argument is a function it means we need
-                        //dependency scanning.
-                        next3 = tokens[i + 3];
-                        next4 = tokens[i + 4];
-                        if (!next3 || !next4) {
-                            return;
-                        }
-
-                        if (next3.type === 'Punctuator' &&
-                                next3.value === ',' &&
-                                next4.type === 'Keyword' &&
-                                next4.value === 'function') {
+                    if (args.length === 1) {
+                        if (firstArg.type === 'Identifier') {
+                            //The define(factory) case, but
+                            //only allow it if one Identifier arg,
+                            //to limit impact of false positives.
+                            needsId = true;
+                            depAction = 'empty';
+                        } else if (firstArg.type === 'FunctionExpression') {
+                            //define(function(){})
+                            factoryNode = firstArg;
+                            needsId = true;
                             depAction = 'scan';
-                            nameCommaRange = next3.range;
-                        } else {
-                            depAction = 'skip';
-                        }
-                    } else if (next2.type === 'Identifier') {
-                        //May be the define(factory); type.
-                        next3 = tokens[i + 3];
-                        if (!next3) {
-                            return;
-                        }
-                        if (next3.type === 'Punctuator' &&
-                                next3.value === ')') {
-                            needsId = true;
-                            depAction = 'empty';
-                        } else {
-                            return;
-                        }
-                    } else if (next2.type === 'Numeric') {
-                        //May be the define(12345); type.
-                        next3 = tokens[i + 3];
-                        if (!next3) {
-                            return;
-                        }
-                        if (next3.type === 'Punctuator' &&
-                                next3.value === ')') {
+                        } else if (firstArg.type === 'ObjectExpression') {
+                            //define({});
                             needsId = true;
                             depAction = 'skip';
-                        } else {
-                            return;
-                        }
-                    } else if (next2.type === 'Punctuator' &&
-                               next2.value === '-') {
-                        //May be the define(-12345); type.
-                        next3 = tokens[i + 3];
-                        if (!next3) {
-                            return;
-                        }
-                        if (next3.type === 'Numeric') {
-                            next4 = tokens[i + 4];
-                            if (!next4) {
-                                return;
-                            }
-                            if (next4.type === 'Punctuator' &&
-                                    next4.value === ')') {
-                                needsId = true;
-                                depAction = 'skip';
-                            } else {
-                                return;
-                            }
-                        } else {
-                            return;
-                        }
-                    } else if (next2.type === 'Keyword' && next2.value === 'this') {
-                        //May be the define(this.key); type
-                        next3 = tokens[i + 3];
-                        next4 = tokens[i + 4];
-                        next5 = tokens[i + 5];
-                        if (!next3 || !next4 || !next5) {
-                            return;
-                        }
-
-                        if (next3.type === 'Punctuator' && next3.value === '.' &&
-                                next4.type === 'Identifier' &&
-                                next5.type === 'Punctuator' && next5.value === ')') {
+                        } else if (firstArg.type === 'Literal' &&
+                                   typeof firstArg.value === 'number') {
+                            //define('12345');
+                            needsId = true;
+                            depAction = 'skip';
+                        } else if (firstArg.type === 'UnaryExpression' &&
+                                   firstArg.operator === '-' &&
+                                   firstArg.argument &&
+                                   firstArg.argument.type === 'Literal' &&
+                                   typeof firstArg.argument.value === 'number') {
+                            //define('-12345');
+                            needsId = true;
+                            depAction = 'skip';
+                        } else if (firstArg.type === 'MemberExpression' &&
+                                   firstArg.object &&
+                                   firstArg.property &&
+                                   firstArg.property.type === 'Identifier') {
+                            //define(this.key);
                             needsId = true;
                             depAction = 'empty';
+                        }
+                    } else if (firstArg.type === 'ArrayExpression') {
+                        //define([], ...);
+                        needsId = true;
+                        depAction = 'skip';
+                    } else if (firstArg.type === 'Literal' &&
+                               typeof firstArg.value === 'string') {
+                        //define('string', ....)
+                        //Already has an ID.
+                        needsId = false;
+                        if (args.length === 2 &&
+                            args[1].type === 'FunctionExpression') {
+                            //Needs dependency scanning.
+                            factoryNode = args[1];
+                            depAction = 'scan';
                         } else {
-                            return;
+                            depAction = 'skip';
                         }
                     } else {
-                        //Not a match, skip it.
+                        //Unknown define entity, keep looking, even
+                        //in the subtree for this node.
                         return;
                     }
-
-                    //A valid define call. Need to find the end, start counting
-                    //parentheses.
-                    inDefine = true;
-                    parenCount = 0;
 
                     range = {
                         foundId: foundId,
                         needsId: needsId,
                         depAction: depAction,
                         namespaceExists: namespaceExists,
-                        defineRange: token.range,
-                        parenRange: next.range,
-                        nameCommaRange: nameCommaRange,
+                        node: node,
+                        defineLoc: node.loc,
+                        firstArgLoc: firstArgLoc,
+                        factoryNode: factoryNode,
                         sourceUrlData: sourceUrlData
                     };
 
@@ -20151,11 +23800,14 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
                     //set for transport form.
                     if (range.needsId) {
                         if (foundAnon) {
-                            throw new Error(path +
-                                ' has two many anonymous modules in it.');
+                            logger.trace(path + ' has more than one anonymous ' +
+                                'define. May be a built file from another ' +
+                                'build system like, Ender. Skipping normalization.');
+                            defineInfos = [];
+                            return false;
                         } else {
                             foundAnon = range;
-                            defineRanges.push(range);
+                            defineInfos.push(range);
                         }
                     } else if (depAction === 'scan') {
                         scanCount += 1;
@@ -20164,36 +23816,53 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
                             //anon one, since this is an already optimized
                             //file like the phonegap one.
                             if (!scanReset) {
-                                defineRanges =  foundAnon ? [foundAnon] : [];
+                                defineInfos =  foundAnon ? [foundAnon] : [];
                                 scanReset = true;
                             }
                         } else {
-                            defineRanges.push(range);
+                            defineInfos.push(range);
                         }
                     }
                 }
             });
 
-            if (!defineRanges.length) {
-                return contents;
+
+            if (!defineInfos.length) {
+                return applySourceUrl(contents);
             }
 
             //Reverse the matches, need to start from the bottom of
             //the file to modify it, so that the ranges are still true
             //further up.
-            defineRanges.reverse();
+            defineInfos.reverse();
 
-            defineRanges.forEach(function (info) {
+            contentLines = contents.split('\n');
+
+            modLine = function (loc, contentInsertion) {
+                var startIndex = loc.start.column,
+                //start.line is 1-based, not 0 based.
+                lineIndex = loc.start.line - 1,
+                line = contentLines[lineIndex];
+                contentLines[lineIndex] = line.substring(0, startIndex) +
+                                           contentInsertion +
+                                           line.substring(startIndex,
+                                                              line.length);
+            };
+
+            defineInfos.forEach(function (info) {
+                var deps,
+                    contentInsertion = '',
+                    depString = '';
+
                 //Do the modifications "backwards", in other words, start with the
                 //one that is farthest down and work up, so that the ranges in the
-                //defineRanges still apply. So that means deps, id, then namespace.
-
+                //defineInfos still apply. So that means deps, id, then namespace.
                 if (info.needsId && moduleName) {
                     contentInsertion += "'" + moduleName + "',";
                 }
 
                 if (info.depAction === 'scan') {
-                    deps = parse.getAnonDeps(path, contents.substring(info.defineRange[0], info.defineEndRange[1]));
+                    deps = parse.getAnonDepsFromNode(info.factoryNode);
 
                     if (deps.length) {
                         depString = '[' + deps.map(function (dep) {
@@ -20204,32 +23873,23 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
                     }
                     depString +=  ',';
 
-                    if (info.nameCommaRange) {
+                    if (info.factoryNode) {
                         //Already have a named module, need to insert the
                         //dependencies after the name.
-                        contents = contents.substring(0, info.nameCommaRange[1]) +
-                                   depString +
-                                   contents.substring(info.nameCommaRange[1],
-                                                  contents.length);
+                        modLine(info.factoryNode.loc, depString);
                     } else {
-                        contentInsertion +=  depString;
+                        contentInsertion += depString;
                     }
                 }
 
                 if (contentInsertion) {
-                    contents = contents.substring(0, info.parenRange[1]) +
-                               contentInsertion +
-                               contents.substring(info.parenRange[1],
-                                                  contents.length);
+                    modLine(info.firstArgLoc, contentInsertion);
                 }
 
                 //Do namespace last so that ui does not mess upthe parenRange
                 //used above.
                 if (namespace && !info.namespaceExists) {
-                    contents = contents.substring(0, info.defineRange[0]) +
-                               namespace + '.' +
-                               contents.substring(info.defineRange[0],
-                                                  contents.length);
+                    modLine(info.defineLoc, namespace + '.');
                 }
 
                 //Notify any listener for the found info
@@ -20238,18 +23898,172 @@ define('transform', [ './esprima', './parse', 'logger', 'lang'], function (espri
                 }
             });
 
-            if (options.useSourceUrl) {
-                contents = 'eval("' + lang.jsEscape(contents) +
-                    '\\n//@ sourceURL=' + (path.indexOf('/') === 0 ? '' : '/') +
-                    path +
-                    '");\n';
+            contents = contentLines.join('\n');
+
+            return applySourceUrl(contents);
+        },
+
+        /**
+         * Modify the contents of a require.config/requirejs.config call. This
+         * call will LOSE any existing comments that are in the config string.
+         *
+         * @param  {String} fileContents String that may contain a config call
+         * @param  {Function} onConfig Function called when the first config
+         * call is found. It will be passed an Object which is the current
+         * config, and the onConfig function should return an Object to use
+         * as the config.
+         * @return {String} the fileContents with the config changes applied.
+         */
+        modifyConfig: function (fileContents, onConfig) {
+            var details = parse.findConfig(fileContents),
+                config = details.config;
+
+            if (config) {
+                config = onConfig(config);
+                if (config) {
+                    return transform.serializeConfig(config,
+                                              fileContents,
+                                              details.range[0],
+                                              details.range[1],
+                                              {
+                                                quote: details.quote
+                                              });
+                }
             }
 
-            return contents;
+            return fileContents;
+        },
+
+        serializeConfig: function (config, fileContents, start, end, options) {
+            //Calculate base level of indent
+            var indent, match, configString, outDentRegExp,
+                baseIndent = '',
+                startString = fileContents.substring(0, start),
+                existingConfigString = fileContents.substring(start, end),
+                lineReturn = existingConfigString.indexOf('\r') === -1 ? '\n' : '\r\n',
+                lastReturnIndex = startString.lastIndexOf('\n');
+
+            //Get the basic amount of indent for the require config call.
+            if (lastReturnIndex === -1) {
+                lastReturnIndex = 0;
+            }
+
+            match = baseIndentRegExp.exec(startString.substring(lastReturnIndex + 1, start));
+            if (match && match[1]) {
+                baseIndent = match[1];
+            }
+
+            //Calculate internal indentation for config
+            match = indentRegExp.exec(existingConfigString);
+            if (match && match[1]) {
+                indent = match[1];
+            }
+
+            if (!indent || indent.length < baseIndent) {
+                indent = '  ';
+            } else {
+                indent = indent.substring(baseIndent.length);
+            }
+
+            outDentRegExp = new RegExp('(' + lineReturn + ')' + indent, 'g');
+
+            configString = transform.objectToString(config, {
+                                                    indent: indent,
+                                                    lineReturn: lineReturn,
+                                                    outDentRegExp: outDentRegExp,
+                                                    quote: options && options.quote
+                                                });
+
+            //Add in the base indenting level.
+            configString = applyIndent(configString, baseIndent, lineReturn);
+
+            return startString + configString + fileContents.substring(end);
+        },
+
+        /**
+         * Tries converting a JS object to a string. This will likely suck, and
+         * is tailored to the type of config expected in a loader config call.
+         * So, hasOwnProperty fields, strings, numbers, arrays and functions,
+         * no weird recursively referenced stuff.
+         * @param  {Object} obj        the object to convert
+         * @param  {Object} options    options object with the following values:
+         *         {String} indent     the indentation to use for each level
+         *         {String} lineReturn the type of line return to use
+         *         {outDentRegExp} outDentRegExp the regexp to use to outdent functions
+         *         {String} quote      the quote type to use, ' or ". Optional. Default is "
+         * @param  {String} totalIndent the total indent to print for this level
+         * @return {String}            a string representation of the object.
+         */
+        objectToString: function (obj, options, totalIndent) {
+            var startBrace, endBrace, nextIndent,
+                first = true,
+                value = '',
+                lineReturn = options.lineReturn,
+                indent = options.indent,
+                outDentRegExp = options.outDentRegExp,
+                quote = options.quote || '"';
+
+            totalIndent = totalIndent || '';
+            nextIndent = totalIndent + indent;
+
+            if (obj === null) {
+                value = 'null';
+            } else if (obj === undefined) {
+                value = 'undefined';
+            } else if (typeof obj === 'number' || typeof obj === 'boolean') {
+                value = obj;
+            } else if (typeof obj === 'string') {
+                //Use double quotes in case the config may also work as JSON.
+                value = quote + lang.jsEscape(obj) + quote;
+            } else if (lang.isArray(obj)) {
+                lang.each(obj, function (item, i) {
+                    value += (i !== 0 ? ',' + lineReturn : '' ) +
+                        nextIndent +
+                        transform.objectToString(item,
+                                                 options,
+                                                 nextIndent);
+                });
+
+                startBrace = '[';
+                endBrace = ']';
+            } else if (lang.isFunction(obj) || lang.isRegExp(obj)) {
+                //The outdent regexp just helps pretty up the conversion
+                //just in node. Rhino strips comments and does a different
+                //indent scheme for Function toString, so not really helpful
+                //there.
+                value = obj.toString().replace(outDentRegExp, '$1');
+            } else {
+                //An object
+                lang.eachProp(obj, function (v, prop) {
+                    value += (first ? '': ',' + lineReturn) +
+                        nextIndent +
+                        (keyRegExp.test(prop) ? prop : quote + lang.jsEscape(prop) + quote )+
+                        ': ' +
+                        transform.objectToString(v,
+                                                 options,
+                                                 nextIndent);
+                    first = false;
+                });
+                startBrace = '{';
+                endBrace = '}';
+            }
+
+            if (startBrace) {
+                value = startBrace +
+                        lineReturn +
+                        value +
+                        lineReturn + totalIndent +
+                        endBrace;
+            }
+
+            return value;
         }
-    });
-});/**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+    };
+
+    return transform;
+});
+/**
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -20283,11 +24097,12 @@ define('pragma', ['parse', 'logger'], function (parse, logger) {
         conditionalRegExp: /(exclude|include)Start\s*\(\s*["'](\w+)["']\s*,(.*)\)/,
         useStrictRegExp: /['"]use strict['"];/g,
         hasRegExp: /has\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-        nsRegExp: /(^|[^\.])(requirejs|require|define)(\.config)?\s*\(/g,
+        configRegExp: /(^|[^\.])(requirejs|require)(\.config)\s*\(/g,
         nsWrapRegExp: /\/\*requirejs namespace: true \*\//,
-        apiDefRegExp: /var requirejs, require, define;/,
+        apiDefRegExp: /var requirejs,\s*require,\s*define;/,
         defineCheckRegExp: /typeof\s+define\s*===\s*["']function["']\s*&&\s*define\s*\.\s*amd/g,
-        defineTypeFirstCheckRegExp: /\s*["']function["']\s*===\s*typeof\s+define\s*&&\s*define\s*\.\s*amd/g,
+        defineStringCheckRegExp: /typeof\s+define\s*===\s*["']function["']\s*&&\s*define\s*\[\s*["']amd["']\s*\]/g,
+        defineTypeFirstCheckRegExp: /\s*["']function["']\s*==(=?)\s*typeof\s+define\s*&&\s*define\s*\.\s*amd/g,
         defineJQueryRegExp: /typeof\s+define\s*===\s*["']function["']\s*&&\s*define\s*\.\s*amd\s*&&\s*define\s*\.\s*amd\s*\.\s*jQuery/g,
         defineHasRegExp: /typeof\s+define\s*==(=)?\s*['"]function['"]\s*&&\s*typeof\s+define\.amd\s*==(=)?\s*['"]object['"]\s*&&\s*define\.amd/g,
         defineTernaryRegExp: /typeof\s+define\s*===\s*['"]function["']\s*&&\s*define\s*\.\s*amd\s*\?\s*define/,
@@ -20300,7 +24115,10 @@ define('pragma', ['parse', 'logger'], function (parse, logger) {
         namespace: function (fileContents, ns, onLifecycleName) {
             if (ns) {
                 //Namespace require/define calls
-                fileContents = fileContents.replace(pragma.nsRegExp, '$1' + ns + '.$2$3(');
+                fileContents = fileContents.replace(pragma.configRegExp, '$1' + ns + '.$2$3(');
+
+
+                fileContents = parse.renameNamespace(fileContents, ns);
 
                 //Namespace define ternary use:
                 fileContents = fileContents.replace(pragma.defineTernaryRegExp,
@@ -20319,17 +24137,18 @@ define('pragma', ['parse', 'logger'], function (parse, logger) {
                 //checks above.
                 fileContents = fileContents.replace(pragma.defineCheckRegExp,
                                                     "typeof " + ns + ".define === 'function' && " + ns + ".define.amd");
+                fileContents = fileContents.replace(pragma.defineStringCheckRegExp,
+                                                    "typeof " + ns + ".define === 'function' && " + ns + ".define['amd']");
                 fileContents = fileContents.replace(pragma.defineTypeFirstCheckRegExp,
                                                     "'function' === typeof " + ns + ".define && " + ns + ".define.amd");
 
                 //Check for require.js with the require/define definitions
                 if (pragma.apiDefRegExp.test(fileContents) &&
-                    fileContents.indexOf("if (typeof " + ns + " === 'undefined')") === -1) {
+                    fileContents.indexOf("if (!" + ns + " || !" + ns + ".requirejs)") === -1) {
                     //Wrap the file contents in a typeof check, and a function
                     //to contain the API globals.
-                    fileContents = "var " + ns + ";(function () { if (typeof " +
-                                    ns + " === 'undefined') {\n" +
-                                    ns + ' = {};\n' +
+                    fileContents = "var " + ns + ";(function () { if (!" + ns + " || !" + ns + ".requirejs) {\n" +
+                                    "if (!" + ns + ") { " + ns + ' = {}; } else { require = ' + ns + '; }\n' +
                                     fileContents +
                                     "\n" +
                                     ns + ".requirejs = requirejs;" +
@@ -20493,7 +24312,9 @@ define('pragma', ['parse', 'logger'], function (parse, logger) {
             }
 
             //Strip amdefine use for node-shared modules.
-            fileContents = fileContents.replace(pragma.amdefineRegExp, '');
+            if (!config.keepAmdefine) {
+                fileContents = fileContents.replace(pragma.amdefineRegExp, '');
+            }
 
             //Do namespacing
             if (onLifecycleName === 'OnSave' && config.namespace) {
@@ -20509,7 +24330,7 @@ define('pragma', ['parse', 'logger'], function (parse, logger) {
 });
 if(env === 'browser') {
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -20523,7 +24344,7 @@ define('browser/optimize', {});
 
 if(env === 'node') {
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -20537,7 +24358,7 @@ define('node/optimize', {});
 
 if(env === 'rhino') {
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -20615,14 +24436,15 @@ define('rhino/optimize', ['logger', 'env!env/file'], function (logger, file) {
             config = config || {};
             var result, mappings, optimized, compressed, baseName, writer,
                 outBaseName, outFileNameMap, outFileNameMapContent,
+                srcOutFileName, concatNameMap,
                 jscomp = Packages.com.google.javascript.jscomp,
                 flags = Packages.com.google.common.flags,
-                //Fake extern
-                externSourceFile = closurefromCode("fakeextern.js", " "),
                 //Set up source input
                 jsSourceFile = closurefromCode(String(fileName), String(fileContents)),
+                sourceListArray = new java.util.ArrayList(),
                 options, option, FLAG_compilation_level, compiler,
-                Compiler = Packages.com.google.javascript.jscomp.Compiler;
+                Compiler = Packages.com.google.javascript.jscomp.Compiler,
+                CommandLineRunner = Packages.com.google.javascript.jscomp.CommandLineRunner;
 
             logger.trace("Minifying file: " + fileName);
 
@@ -20645,7 +24467,7 @@ define('rhino/optimize', ['logger', 'env!env/file'], function (logger, file) {
             if (config.generateSourceMaps) {
                 mappings = new java.util.ArrayList();
 
-                mappings.add(new com.google.javascript.jscomp.SourceMap.LocationMapping(fileName, baseName + ".src"));
+                mappings.add(new com.google.javascript.jscomp.SourceMap.LocationMapping(fileName, baseName + ".src.js"));
                 options.setSourceMapLocationMappings(mappings);
                 options.setSourceMapOutputPath(fileName + ".map");
             }
@@ -20654,16 +24476,33 @@ define('rhino/optimize', ['logger', 'env!env/file'], function (logger, file) {
             Compiler.setLoggingLevel(Packages.java.util.logging.Level[config.loggingLevel || 'WARNING']);
             compiler = new Compiler();
 
-            result = compiler.compile(externSourceFile, jsSourceFile, options);
+            //fill the sourceArrrayList; we need the ArrayList because the only overload of compile
+            //accepting the getDefaultExterns return value (a List) also wants the sources as a List
+            sourceListArray.add(jsSourceFile);
+
+            result = compiler.compile(CommandLineRunner.getDefaultExterns(), sourceListArray, options);
             if (result.success) {
                 optimized = String(compiler.toSource());
 
                 if (config.generateSourceMaps && result.sourceMap && outFileName) {
                     outBaseName = (new java.io.File(outFileName)).getName();
 
-                    file.saveUtf8File(outFileName + ".src", fileContents);
-
+                    srcOutFileName = outFileName + ".src.js";
                     outFileNameMap = outFileName + ".map";
+
+                    //If previous .map file exists, move it to the ".src.js"
+                    //location. Need to update the sourceMappingURL part in the
+                    //src.js file too.
+                    if (file.exists(outFileNameMap)) {
+                        concatNameMap = outFileNameMap.replace(/\.map$/, '.src.js.map');
+                        file.saveFile(concatNameMap, file.readFile(outFileNameMap));
+                        file.saveFile(srcOutFileName,
+                                      fileContents.replace(/\/\# sourceMappingURL=(.+).map/,
+                                                           '/# sourceMappingURL=$1.src.js.map'));
+                    } else {
+                        file.saveUtf8File(srcOutFileName, fileContents);
+                    }
+
                     writer = getFileWriter(outFileNameMap, "utf-8");
                     result.sourceMap.appendTo(writer, outFileName);
                     writer.close();
@@ -20674,13 +24513,13 @@ define('rhino/optimize', ['logger', 'env!env/file'], function (logger, file) {
                     file.saveFile(outFileNameMap,
                         file.readFile(outFileNameMap).replace(mapRegExp, '"file":"' + baseName + '"'));
 
-                    fileContents = optimized + "\n//@ sourceMappingURL=" + outBaseName + ".map";
+                    fileContents = optimized + "\n//# sourceMappingURL=" + outBaseName + ".map";
                 } else {
                     fileContents = optimized;
                 }
                 return fileContents;
             } else {
-                logger.error('Cannot closure compile file: ' + fileName + '. Skipping it.');
+                throw new Error('Cannot closure compile file: ' + fileName + '. Skipping it.');
             }
 
             return fileContents;
@@ -20690,8 +24529,12 @@ define('rhino/optimize', ['logger', 'env!env/file'], function (logger, file) {
     return optimize;
 });
 }
+
+if(env === 'xpconnect') {
+define('xpconnect/optimize', {});
+}
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -20700,16 +24543,19 @@ define('rhino/optimize', ['logger', 'env!env/file'], function (logger, file) {
 /*global define: false */
 
 define('optimize', [ 'lang', 'logger', 'env!env/optimize', 'env!env/file', 'parse',
-         'pragma', 'uglifyjs/index', 'uglifyjs2'],
+         'pragma', 'uglifyjs/index', 'uglifyjs2',
+         'source-map'],
 function (lang,   logger,   envOptimize,        file,           parse,
-          pragma, uglify,             uglify2) {
+          pragma, uglify,             uglify2,
+          sourceMap) {
     'use strict';
 
     var optimize,
-        cssImportRegExp = /\@import\s+(url\()?\s*([^);]+)\s*(\))?([\w, ]*)(;)?/g,
+        cssImportRegExp = /\@import\s+(url\()?\s*([^);]+)\s*(\))?([\w, ]*)(;)?/ig,
         cssCommentImportRegExp = /\/\*[^\*]*@import[^\*]*\*\//g,
         cssUrlRegExp = /\url\(\s*([^\)]+)\s*\)?/g,
-        endSemicolonRegExp = /;\s*$/;
+        SourceMapGenerator = sourceMap.SourceMapGenerator,
+        SourceMapConsumer =sourceMap.SourceMapConsumer;
 
     /**
      * If an URL from a CSS url value contains start/end quotes, remove them.
@@ -20730,14 +24576,51 @@ function (lang,   logger,   envOptimize,        file,           parse,
         return url;
     }
 
+    function fixCssUrlPaths(fileName, path, contents, cssPrefix) {
+        return contents.replace(cssUrlRegExp, function (fullMatch, urlMatch) {
+            var colonIndex, firstChar, parts, i,
+                fixedUrlMatch = cleanCssUrlQuotes(urlMatch);
+
+            fixedUrlMatch = fixedUrlMatch.replace(lang.backSlashRegExp, "/");
+
+            //Only do the work for relative URLs. Skip things that start with / or #, or have
+            //a protocol.
+            firstChar = fixedUrlMatch.charAt(0);
+            colonIndex = fixedUrlMatch.indexOf(":");
+            if (firstChar !== "/" && firstChar !== "#" && (colonIndex === -1 || colonIndex > fixedUrlMatch.indexOf("/"))) {
+                //It is a relative URL, tack on the cssPrefix and path prefix
+                urlMatch = cssPrefix + path + fixedUrlMatch;
+
+            } else {
+                logger.trace(fileName + "\n  URL not a relative URL, skipping: " + urlMatch);
+            }
+
+            //Collapse .. and .
+            parts = urlMatch.split("/");
+            for (i = parts.length - 1; i > 0; i--) {
+                if (parts[i] === ".") {
+                    parts.splice(i, 1);
+                } else if (parts[i] === "..") {
+                    if (i !== 0 && parts[i - 1] !== "..") {
+                        parts.splice(i - 1, 2);
+                        i -= 1;
+                    }
+                }
+            }
+
+            return "url(" + parts.join("/") + ")";
+        });
+    }
+
     /**
      * Inlines nested stylesheets that have @import calls in them.
      * @param {String} fileName the file name
      * @param {String} fileContents the file contents
      * @param {String} cssImportIgnore comma delimited string of files to ignore
+     * @param {String} cssPrefix string to be prefixed before relative URLs
      * @param {Object} included an object used to track the files already imported
      */
-    function flattenCss(fileName, fileContents, cssImportIgnore, included) {
+    function flattenCss(fileName, fileContents, cssImportIgnore, cssPrefix, included, topLevel) {
         //Find the last slash in the name.
         fileName = fileName.replace(lang.backSlashRegExp, "/");
         var endIndex = fileName.lastIndexOf("/"),
@@ -20748,7 +24631,7 @@ function (lang,   logger,   envOptimize,        file,           parse,
             importList = [],
             skippedList = [];
 
-        //First make a pass by removing an commented out @import calls.
+        //First make a pass by removing any commented out @import calls.
         fileContents = fileContents.replace(cssCommentImportRegExp, '');
 
         //Make sure we have a delimited ignore list to make matching faster
@@ -20778,8 +24661,8 @@ function (lang,   logger,   envOptimize,        file,           parse,
                 //If it is not a relative path, then the readFile below will fail,
                 //and we will just skip that import.
                 var fullImportFileName = importFileName.charAt(0) === "/" ? importFileName : filePath + importFileName,
-                    importContents = file.readFile(fullImportFileName), i,
-                    importEndIndex, importPath, fixedUrlMatch, colonIndex, parts, flat;
+                    importContents = file.readFile(fullImportFileName),
+                    importEndIndex, importPath, flat;
 
                 //Skip the file if it has already been included.
                 if (included[fullImportFileName]) {
@@ -20788,7 +24671,7 @@ function (lang,   logger,   envOptimize,        file,           parse,
                 included[fullImportFileName] = true;
 
                 //Make sure to flatten any nested imports.
-                flat = flattenCss(fullImportFileName, importContents, cssImportIgnore, included);
+                flat = flattenCss(fullImportFileName, importContents, cssImportIgnore, cssPrefix, included);
                 importContents = flat.fileContents;
 
                 if (flat.importList.length) {
@@ -20809,35 +24692,7 @@ function (lang,   logger,   envOptimize,        file,           parse,
                 importPath = importPath.replace(/^\.\//, '');
 
                 //Modify URL paths to match the path represented by this file.
-                importContents = importContents.replace(cssUrlRegExp, function (fullMatch, urlMatch) {
-                    fixedUrlMatch = cleanCssUrlQuotes(urlMatch);
-                    fixedUrlMatch = fixedUrlMatch.replace(lang.backSlashRegExp, "/");
-
-                    //Only do the work for relative URLs. Skip things that start with / or have
-                    //a protocol.
-                    colonIndex = fixedUrlMatch.indexOf(":");
-                    if (fixedUrlMatch.charAt(0) !== "/" && (colonIndex === -1 || colonIndex > fixedUrlMatch.indexOf("/"))) {
-                        //It is a relative URL, tack on the path prefix
-                        urlMatch = importPath + fixedUrlMatch;
-                    } else {
-                        logger.trace(importFileName + "\n  URL not a relative URL, skipping: " + urlMatch);
-                    }
-
-                    //Collapse .. and .
-                    parts = urlMatch.split("/");
-                    for (i = parts.length - 1; i > 0; i--) {
-                        if (parts[i] === ".") {
-                            parts.splice(i, 1);
-                        } else if (parts[i] === "..") {
-                            if (i !== 0 && parts[i - 1] !== "..") {
-                                parts.splice(i - 1, 2);
-                                i -= 1;
-                            }
-                        }
-                    }
-
-                    return "url(" + parts.join("/") + ")";
-                });
+                importContents = fixCssUrlPaths(importFileName, importPath, importContents, cssPrefix);
 
                 importList.push(fullImportFileName);
                 return importContents;
@@ -20846,6 +24701,11 @@ function (lang,   logger,   envOptimize,        file,           parse,
                 return fullMatch;
             }
         });
+
+        if (cssPrefix && topLevel) {
+            //Modify URL paths to match the path represented by this file.
+            fileContents = fixCssUrlPaths(fileName, '', fileContents, cssPrefix);
+        }
 
         return {
             importList : importList,
@@ -20912,25 +24772,41 @@ function (lang,   logger,   envOptimize,        file,           parse,
                                     '" not found for this environment');
                 }
 
-                optConfig = config[optimizerName] || {}
+                optConfig = config[optimizerName] || {};
                 if (config.generateSourceMaps) {
                     optConfig.generateSourceMaps = !!config.generateSourceMaps;
+                    optConfig._buildSourceMap = config._buildSourceMap;
                 }
 
-                if (config.preserveLicenseComments) {
-                    //Pull out any license comments for prepending after optimization.
-                    try {
-                        licenseContents = parse.getLicenseComments(fileName, fileContents);
-                    } catch (e) {
-                        logger.error('Cannot parse file: ' + fileName + ' for comments. Skipping it. Error is:\n' + e.toString());
+                try {
+                    if (config.preserveLicenseComments) {
+                        //Pull out any license comments for prepending after optimization.
+                        try {
+                            licenseContents = parse.getLicenseComments(fileName, fileContents);
+                        } catch (e) {
+                            throw new Error('Cannot parse file: ' + fileName + ' for comments. Skipping it. Error is:\n' + e.toString());
+                        }
+                    }
+
+                    fileContents = licenseContents + optFunc(fileName,
+                                                             fileContents,
+                                                             outFileName,
+                                                             keepLines,
+                                                             optConfig);
+                    if (optConfig._buildSourceMap && optConfig._buildSourceMap !== config._buildSourceMap) {
+                        config._buildSourceMap = optConfig._buildSourceMap;
+                    }
+                } catch (e) {
+                    if (config.throwWhen && config.throwWhen.optimize) {
+                        throw e;
+                    } else {
+                        logger.error(e);
                     }
                 }
-
-                fileContents = licenseContents + optFunc(fileName,
-                                                         fileContents,
-                                                         outFileName,
-                                                         keepLines,
-                                                         optConfig);
+            } else {
+                if (config._buildSourceMap) {
+                    config._buildSourceMap = null;
+                }
             }
 
             return fileContents;
@@ -20948,7 +24824,7 @@ function (lang,   logger,   envOptimize,        file,           parse,
 
             //Read in the file. Make sure we have a JS string.
             var originalFileContents = file.readFile(fileName),
-                flat = flattenCss(fileName, originalFileContents, config.cssImportIgnore, {}),
+                flat = flattenCss(fileName, originalFileContents, config.cssImportIgnore, config.cssPrefix, {}, true),
                 //Do not use the flattened CSS if there was one that was skipped.
                 fileContents = flat.skippedList.length ? originalFileContents : flat.fileContents,
                 startIndex, endIndex, buildText, comment;
@@ -20985,7 +24861,7 @@ function (lang,   logger,   envOptimize,        file,           parse,
                 }
                 //Get rid of newlines.
                 if (config.optimizeCss.indexOf(".keepLines") === -1) {
-                    fileContents = fileContents.replace(/[\r\n]/g, "");
+                    fileContents = fileContents.replace(/[\r\n]/g, " ");
                     fileContents = fileContents.replace(/\s+/g, " ");
                     fileContents = fileContents.replace(/\{\s/g, "{");
                     fileContents = fileContents.replace(/\s\}/g, "}");
@@ -20993,6 +24869,20 @@ function (lang,   logger,   envOptimize,        file,           parse,
                     //Remove multiple empty lines.
                     fileContents = fileContents.replace(/(\r\n)+/g, "\r\n");
                     fileContents = fileContents.replace(/(\n)+/g, "\n");
+                }
+                //Remove unnecessary whitespace
+                if (config.optimizeCss.indexOf(".keepWhitespace") === -1) {
+                    //Remove leading and trailing whitespace from lines
+                    fileContents = fileContents.replace(/^[ \t]+/gm, "");
+                    fileContents = fileContents.replace(/[ \t]+$/gm, "");
+                    //Remove whitespace after semicolon, colon, curly brackets and commas
+                    fileContents = fileContents.replace(/(;|:|\{|}|,)[ \t]+/g, "$1");
+                    //Remove whitespace before opening curly brackets
+                    fileContents = fileContents.replace(/[ \t]+(\{)/g, "$1");
+                    //Truncate double whitespace
+                    fileContents = fileContents.replace(/([ \t])+/g, "$1");
+                    //Remove empty lines
+                    fileContents = fileContents.replace(/^[ \t]*[\r\n]/gm,'');
                 }
             } catch (e) {
                 fileContents = originalFileContents;
@@ -21083,13 +24973,14 @@ function (lang,   logger,   envOptimize,        file,           parse,
                     if (errMatch) {
                         errMessage = errMessage.substring(0, errMatch.index);
                     }
-                    logger.error('Cannot uglify file: ' + fileName + '. Skipping it. Error is:\n' + errMessage);
+                    throw new Error('Cannot uglify file: ' + fileName + '. Skipping it. Error is:\n' + errMessage);
                 }
                 return fileContents;
             },
             uglify2: function (fileName, fileContents, outFileName, keepLines, config) {
-                var result,
+                var result, existingMap, resultMap, finalMap, sourceIndex,
                     uconfig = {},
+                    existingMapPath = outFileName + '.map',
                     baseName = fileName && fileName.split('/').pop();
 
                 config = config || {};
@@ -21098,24 +24989,47 @@ function (lang,   logger,   envOptimize,        file,           parse,
 
                 uconfig.fromString = true;
 
-                if (config.generateSourceMaps && outFileName) {
+                if (config.generateSourceMaps && (outFileName || config._buildSourceMap)) {
                     uconfig.outSourceMap = baseName;
+
+                    if (config._buildSourceMap) {
+                        existingMap = JSON.parse(config._buildSourceMap);
+                        uconfig.inSourceMap = existingMap;
+                    } else if (file.exists(existingMapPath)) {
+                        uconfig.inSourceMap = existingMapPath;
+                        existingMap = JSON.parse(file.readFile(existingMapPath));
+                    }
                 }
 
                 logger.trace("Uglify2 file: " + fileName);
 
                 try {
-                    result = uglify2.minify(fileContents, uconfig, baseName + '.src');
-
+                    //var tempContents = fileContents.replace(/\/\/\# sourceMappingURL=.*$/, '');
+                    result = uglify2.minify(fileContents, uconfig, baseName + '.src.js');
                     if (uconfig.outSourceMap && result.map) {
-                        file.saveFile(outFileName + '.src', fileContents);
-                        file.saveFile(outFileName + '.map', result.map);
-                        fileContents = result.code + "\n//@ sourceMappingURL=" + baseName + ".map";
+                        resultMap = result.map;
+                        if (existingMap) {
+                            resultMap = JSON.parse(resultMap);
+                            finalMap = SourceMapGenerator.fromSourceMap(new SourceMapConsumer(resultMap));
+                            finalMap.applySourceMap(new SourceMapConsumer(existingMap));
+                            resultMap = finalMap.toString();
+                        } else if (!config._buildSourceMap) {
+                            file.saveFile(outFileName + '.src.js', fileContents);
+                        }
+
+                        fileContents = result.code;
+
+                        if (config._buildSourceMap) {
+                            config._buildSourceMap = resultMap;
+                        } else {
+                            file.saveFile(outFileName + '.map', resultMap);
+                            fileContents += "\n//# sourceMappingURL=" + baseName + ".map";
+                        }
                     } else {
                         fileContents = result.code;
                     }
                 } catch (e) {
-                    logger.error('Cannot uglify2 file: ' + fileName + '. Skipping it. Error is:\n' + e.toString());
+                    throw new Error('Cannot uglify2 file: ' + fileName + '. Skipping it. Error is:\n' + e.toString());
                 }
                 return fileContents;
             }
@@ -21125,7 +25039,7 @@ function (lang,   logger,   envOptimize,        file,           parse,
     return optimize;
 });
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -21247,18 +25161,45 @@ define('requirePatch', [ 'env!env/file', 'pragma', 'parse', 'lang', 'logger', 'c
                 //spit out strings that can be used in the stringified
                 //build output.
                 context.makeShimExports = function (value) {
-                    function fn() {
-                        return '(function (global) {\n' +
-                            '    return function () {\n' +
-                            '        var ret, fn;\n' +
-                            (value.init ?
-                                    ('       fn = ' + value.init.toString() + ';\n' +
-                                    '        ret = fn.apply(global, arguments);\n') : '') +
-                            (value.exports ?
-                                    '        return ret || global.' + value.exports + ';\n' :
-                                    '        return ret;\n') +
-                            '    };\n' +
-                            '}(this))';
+                    var fn;
+                    if (context.config.wrapShim) {
+                        fn = function () {
+                            var str = 'return ';
+                            // If specifies an export that is just a global
+                            // name, no dot for a `this.` and such, then also
+                            // attach to the global, for `var a = {}` files
+                            // where the function closure would hide that from
+                            // the global object.
+                            if (value.exports && value.exports.indexOf('.') === -1) {
+                                str += 'root.' + value.exports + ' = ';
+                            }
+
+                            if (value.init) {
+                                str += '(' + value.init.toString() + '.apply(this, arguments))';
+                            }
+                            if (value.init && value.exports) {
+                                str += ' || ';
+                            }
+                            if (value.exports) {
+                                str += value.exports;
+                            }
+                            str += ';';
+                            return str;
+                        };
+                    } else {
+                        fn = function () {
+                            return '(function (global) {\n' +
+                                '    return function () {\n' +
+                                '        var ret, fn;\n' +
+                                (value.init ?
+                                        ('       fn = ' + value.init.toString() + ';\n' +
+                                        '        ret = fn.apply(global, arguments);\n') : '') +
+                                (value.exports ?
+                                        '        return ret || global.' + value.exports + ';\n' :
+                                        '        return ret;\n') +
+                                '    };\n' +
+                                '}(this))';
+                        };
                     }
 
                     return fn;
@@ -21336,7 +25277,8 @@ define('requirePatch', [ 'env!env/file', 'pragma', 'parse', 'lang', 'logger', 'c
                                 return require._cacheReadAsync(url).then(function (text) {
                                     contents = text;
 
-                                    if (context.config.cjsTranslate) {
+                                    if (context.config.cjsTranslate &&
+                                        (!context.config.shim || !lang.hasProp(context.config.shim, moduleName))) {
                                         contents = commonJs.convert(url, contents);
                                     }
 
@@ -21444,10 +25386,6 @@ define('requirePatch', [ 'env!env/file', 'pragma', 'parse', 'lang', 'logger', 'c
                 //callback, but only if it meets certain criteria.
                 context.execCb = function (name, cb, args, exports) {
                     var buildShimExports = getOwn(layer.context.buildShimExports, name);
-
-                    if (falseProp(layer.needsDefine, name) && !buildShimExports) {
-                        layer.modulesWithNames[name] = true;
-                    }
 
                     if (buildShimExports) {
                         return buildShimExports;
@@ -21600,7 +25538,7 @@ define('requirePatch', [ 'env!env/file', 'pragma', 'parse', 'lang', 'logger', 'c
     };
 });
 /**
- * @license RequireJS Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -21683,11 +25621,11 @@ define('commonJs', ['env!env/file', 'parse'], function (file, parse) {
 
                 if (commonJsProps.dirname || commonJsProps.filename) {
                     preamble = 'var __filename = module.uri || "", ' +
-                               '__dirname = __filename.substring(0, __filename.lastIndexOf("/") + 1);\n';
+                               '__dirname = __filename.substring(0, __filename.lastIndexOf("/") + 1); ';
                 }
 
                 //Construct the wrapper boilerplate.
-                fileContents = 'define(function (require, exports, module) {\n' +
+                fileContents = 'define(function (require, exports, module) {' +
                     preamble +
                     fileContents +
                     '\n});\n';
@@ -21704,19 +25642,19 @@ define('commonJs', ['env!env/file', 'parse'], function (file, parse) {
     return commonJs;
 });
 /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
 
 /*jslint plusplus: true, nomen: true, regexp: true  */
-/*global define, require, requirejs */
+/*global define, requirejs */
 
 
 define('build', function (require) {
     'use strict';
 
-    var build, buildBaseConfig,
+    var build,
         lang = require('lang'),
         prim = require('prim'),
         logger = require('logger'),
@@ -21725,14 +25663,16 @@ define('build', function (require) {
         optimize = require('optimize'),
         pragma = require('pragma'),
         transform = require('transform'),
-        load = require('env!env/load'),
         requirePatch = require('requirePatch'),
-        quit = require('env!env/quit'),
+        env = require('env'),
         commonJs = require('commonJs'),
+        SourceMapGenerator = require('source-map/source-map-generator'),
         hasProp = lang.hasProp,
         getOwn = lang.getOwn,
         falseProp = lang.falseProp,
-        endsWithSemiColonRegExp = /;\s*$/;
+        endsWithSemiColonRegExp = /;\s*$/,
+        endsWithSlashRegExp = /[\/\\]$/,
+        resourceIsModuleIdRegExp = /^[\w\/\\\.]+$/;
 
     prim.nextTick = function (fn) {
         fn();
@@ -21761,30 +25701,32 @@ define('build', function (require) {
         }
     };
 
-    buildBaseConfig = {
-        appDir: "",
-        pragmas: {},
-        paths: {},
-        optimize: "uglify",
-        optimizeCss: "standard.keepLines",
-        inlineText: true,
-        isBuild: true,
-        optimizeAllPluginResources: false,
-        findNestedDependencies: false,
-        preserveLicenseComments: true,
-        //By default, all files/directories are copied, unless
-        //they match this regexp, by default just excludes .folders
-        dirExclusionRegExp: file.dirExclusionRegExp,
-        _buildPathToModuleIndex: {}
-    };
+    function makeBuildBaseConfig() {
+        return {
+            appDir: "",
+            pragmas: {},
+            paths: {},
+            optimize: "uglify",
+            optimizeCss: "standard.keepLines.keepWhitespace",
+            inlineText: true,
+            isBuild: true,
+            optimizeAllPluginResources: false,
+            findNestedDependencies: false,
+            preserveLicenseComments: true,
+            //By default, all files/directories are copied, unless
+            //they match this regexp, by default just excludes .folders
+            dirExclusionRegExp: file.dirExclusionRegExp,
+            _buildPathToModuleIndex: {}
+        };
+    }
 
     /**
      * Some JS may not be valid if concatenated with other JS, in particular
      * the style of omitting semicolons and rely on ASI. Add a semicolon in
      * those cases.
      */
-    function addSemiColon(text) {
-        if (endsWithSemiColonRegExp.test(text)) {
+    function addSemiColon(text, config) {
+        if (config.skipSemiColonInsertion || endsWithSemiColonRegExp.test(text)) {
             return text;
         } else {
             return text + ";";
@@ -21861,6 +25803,8 @@ define('build', function (require) {
 
             return build._run(cmdConfig);
         }).then(null, function (e) {
+            var err;
+
             errorMsg = e.toString();
             errorTree = e.moduleTree;
             stackMatch = stackRegExp.exec(errorMsg);
@@ -21901,12 +25845,9 @@ define('build', function (require) {
                 }
             }
 
-            if (logger.level > logger.ERROR) {
-                throw new Error(errorMsg);
-            } else {
-                logger.error(errorMsg);
-                quit(1);
-            }
+            err = new Error(errorMsg);
+            err.originalError = e;
+            throw err;
         });
     };
 
@@ -21914,7 +25855,7 @@ define('build', function (require) {
         var buildPaths, fileName, fileNames,
             paths, i,
             baseConfig, config,
-            modules, builtModule, srcPath, buildContext,
+            modules, srcPath, buildContext,
             destPath, moduleMap, parentModuleMap, context,
             resources, resource, plugin, fileContents,
             pluginProcessed = {},
@@ -21922,7 +25863,7 @@ define('build', function (require) {
             pluginCollector = {};
 
         return prim().start(function () {
-            var prop, moduleName;
+            var prop;
 
             //Can now run the patches to require.js to allow it to be used for
             //build generation. Do it here instead of at the top of the module
@@ -21932,10 +25873,6 @@ define('build', function (require) {
 
             config = build.createConfig(cmdConfig);
             paths = config.paths;
-
-            if (config.logLevel) {
-                logger.logLevel(config.logLevel);
-            }
 
             //Remove the previous build dir, in case it contains source transforms,
             //like the ones done with onBuildRead and onBuildWrite.
@@ -22018,9 +25955,11 @@ define('build', function (require) {
                         module._sourcePath = buildContext.nameToUrl(module.name);
                         //If the module does not exist, and this is not a "new" module layer,
                         //as indicated by a true "create" property on the module, and
-                        //it is not a plugin-loaded resource, then throw an error.
+                        //it is not a plugin-loaded resource, and there is no
+                        //'rawText' containing the module's source then throw an error.
                         if (!file.exists(module._sourcePath) && !module.create &&
-                                module.name.indexOf('!') === -1) {
+                                module.name.indexOf('!') === -1 &&
+                                (!config.rawText || !lang.hasProp(config.rawText, module.name))) {
                             throw new Error("ERROR: module path does not exist: " +
                                             module._sourcePath + " for module named: " + module.name +
                                             ". Path is relative to: " + file.absPath('.'));
@@ -22051,6 +25990,18 @@ define('build', function (require) {
                     modules.forEach(function (module) {
                         if (module.name) {
                             module._buildPath = buildContext.nameToUrl(module.name, null);
+
+                            //If buildPath and sourcePath are the same, throw since this
+                            //would result in modifying source. This condition can happen
+                            //with some more tricky paths: config and appDir/baseUrl
+                            //setting, which is a sign of incorrect config.
+                            if (module._buildPath === module._sourcePath) {
+                                throw new Error('Module ID \'' + module.name  +
+                                                '\' has a source path that is same as output path: ' +
+                                                module._sourcePath +
+                                                '. Stopping, config is malformed.');
+                            }
+
                             if (!module.create) {
                                 file.copyFile(module._sourcePath, module._buildPath);
                             }
@@ -22065,6 +26016,8 @@ define('build', function (require) {
             if (config.optimizeCss && config.optimizeCss !== "none" && config.dir) {
                 buildFileContents += optimize.css(config.dir, config);
             }
+        }).then(function() {
+            baseConfig = lang.deeplikeCopy(require.s.contexts._.config);
         }).then(function () {
             var actions = [];
 
@@ -22073,10 +26026,10 @@ define('build', function (require) {
                     return function () {
                         //Save off buildPath to module index in a hash for quicker
                         //lookup later.
-                        config._buildPathToModuleIndex[module._buildPath] = i;
+                        config._buildPathToModuleIndex[file.normalize(module._buildPath)] = i;
 
                         //Call require to calculate dependencies.
-                        return build.traceDependencies(module, config)
+                        return build.traceDependencies(module, config, baseConfig)
                             .then(function (layer) {
                                 module.layer = layer;
                             });
@@ -22094,7 +26047,6 @@ define('build', function (require) {
                 //of those modules end up being one of the excluded values.
                 actions = modules.map(function (module) {
                     return function () {
-                        var actions;
                         if (module.exclude) {
                             module.excludeLayers = [];
                             return prim.serial(module.exclude.map(function (exclude, i) {
@@ -22105,7 +26057,7 @@ define('build', function (require) {
                                     if (found) {
                                         module.excludeLayers[i] = found;
                                     } else {
-                                        return build.traceDependencies({name: exclude}, config)
+                                        return build.traceDependencies({name: exclude}, config, baseConfig)
                                             .then(function (layer) {
                                                 module.excludeLayers[i] = { layer: layer };
                                             });
@@ -22127,12 +26079,11 @@ define('build', function (require) {
                             //get the nested dependencies for it via a matching entry
                             //in the module.excludeLayers array.
                             module.exclude.forEach(function (excludeModule, i) {
-                                var excludeLayer = module.excludeLayers[i].layer, map = excludeLayer.buildPathMap, prop;
-                                for (prop in map) {
-                                    if (hasProp(map, prop)) {
-                                        build.removeModulePath(prop, map[prop], module.layer);
-                                    }
-                                }
+                                var excludeLayer = module.excludeLayers[i].layer,
+                                    map = excludeLayer.buildFileToModule;
+                                excludeLayer.buildFilePaths.forEach(function(filePath){
+                                    build.removeModulePath(map[filePath], filePath, module.layer);
+                                });
                             });
                         }
                         if (module.excludeShallow) {
@@ -22149,13 +26100,23 @@ define('build', function (require) {
 
                         //Flatten them and collect the build output for each module.
                         return build.flattenModule(module, module.layer, config).then(function (builtModule) {
+                            var finalText, baseName;
                             //Save it to a temp file for now, in case there are other layers that
                             //contain optimized content that should not be included in later
                             //layer optimizations. See issue #56.
                             if (module._buildPath === 'FUNCTION') {
                                 module._buildText = builtModule.text;
+                                module._buildSourceMap = builtModule.sourceMap;
                             } else {
-                                file.saveUtf8File(module._buildPath + '-temp', builtModule.text);
+                                finalText = builtModule.text;
+                                if (builtModule.sourceMap) {
+                                    baseName = module._buildPath.split('/');
+                                    baseName = baseName.pop();
+                                    finalText += '\n//# sourceMappingURL=' + baseName + '.map';
+                                    file.saveUtf8File(module._buildPath + '.map', builtModule.sourceMap);
+                                }
+                                file.saveUtf8File(module._buildPath + '-temp', finalText);
+
                             }
                             buildFileContents += builtModule.buildText;
                         });
@@ -22163,7 +26124,7 @@ define('build', function (require) {
                 }));
             }
         }).then(function () {
-            var moduleName;
+            var moduleName, outOrigSourceMap;
             if (modules) {
                 //Now move the build layers to their final position.
                 modules.forEach(function (module) {
@@ -22177,15 +26138,27 @@ define('build', function (require) {
                         //And finally, if removeCombined is specified, remove
                         //any of the files that were used in this layer.
                         //Be sure not to remove other build layers.
-                        if (config.removeCombined) {
+                        if (config.removeCombined && !config.out) {
                             module.layer.buildFilePaths.forEach(function (path) {
-                                if (file.exists(path) && !modules.some(function (mod) {
+                                var isLayer = modules.some(function (mod) {
                                         return mod._buildPath === path;
-                                    })) {
+                                    }),
+                                    relPath = build.makeRelativeFilePath(config.dir, path);
+
+                                if (file.exists(path) &&
+                                    // not a build layer target
+                                    !isLayer &&
+                                    // not outside the build directory
+                                    relPath.indexOf('..') !== 0) {
                                     file.deleteFile(path);
                                 }
                             });
                         }
+                    }
+
+                    //Signal layer is done
+                    if (config.onModuleBundleComplete) {
+                        config.onModuleBundleComplete(module.onCompleteData);
                     }
                 });
             }
@@ -22201,10 +26174,18 @@ define('build', function (require) {
                 //Just need to worry about one JS file.
                 fileName = config.modules[0]._buildPath;
                 if (fileName === 'FUNCTION') {
-                    config.modules[0]._buildText = optimize.js(fileName,
+                    outOrigSourceMap = config.modules[0]._buildSourceMap;
+                    config._buildSourceMap = outOrigSourceMap;
+                    config.modules[0]._buildText = optimize.js((config.modules[0].name ||
+                                                                config.modules[0].include[0] ||
+                                                                fileName) + '.build.js',
                                                                config.modules[0]._buildText,
                                                                null,
                                                                config);
+                    if (config._buildSourceMap && config._buildSourceMap !== outOrigSourceMap) {
+                        config.modules[0]._buildSourceMap = config._buildSourceMap;
+                        config._buildSourceMap = null;
+                    }
                 } else {
                     optimize.jsFile(fileName, null, fileName, config);
                 }
@@ -22213,7 +26194,7 @@ define('build', function (require) {
 
                 //JS optimizations.
                 fileNames = file.getFilteredFileList(config.dir, /\.js$/, true);
-                fileNames.forEach(function (fileName, i) {
+                fileNames.forEach(function (fileName) {
                     var cfg, override, moduleIndex;
 
                     //Generate the module name from the config.dir root.
@@ -22239,21 +26220,37 @@ define('build', function (require) {
                         //standalone, one module per file.
                         fileContents = file.readFile(fileName);
 
+
                         //For builds, if wanting cjs translation, do it now, so that
                         //the individual modules can be loaded cross domain via
                         //plain script tags.
-                        if (config.cjsTranslate) {
+                        if (config.cjsTranslate &&
+                            (!config.shim || !lang.hasProp(config.shim, moduleName))) {
                             fileContents = commonJs.convert(fileName, fileContents);
                         }
 
-                        //Only do transport normalization if this is not a build
-                        //layer (since it was already normalized) and if
-                        //normalizeDirDefines indicated all should be done.
-                        if (moduleIndex === -1 && config.normalizeDirDefines === "all") {
-                            fileContents = build.toTransport(config.namespace,
-                                                         null,
-                                                         fileName,
-                                                         fileContents);
+                        if (moduleIndex === -1) {
+                            if (config.onBuildRead) {
+                                fileContents = config.onBuildRead(moduleName,
+                                                                  fileName,
+                                                                  fileContents);
+                            }
+
+                            //Only do transport normalization if this is not a build
+                            //layer (since it was already normalized) and if
+                            //normalizeDirDefines indicated all should be done.
+                            if (config.normalizeDirDefines === "all") {
+                                fileContents = build.toTransport(config.namespace,
+                                                             null,
+                                                             fileName,
+                                                             fileContents);
+                            }
+
+                            if (config.onBuildWrite) {
+                                fileContents = config.onBuildWrite(moduleName,
+                                                                   fileName,
+                                                                   fileContents);
+                            }
                         }
 
                         override = moduleIndex > -1 ?
@@ -22339,7 +26336,7 @@ define('build', function (require) {
             }
 
             if (typeof config.out === 'function') {
-                config.out(config.modules[0]._buildText);
+                config.out(config.modules[0]._buildText, config.modules[0]._buildSourceMap);
             }
 
             //Print out what was built into which layers.
@@ -22359,8 +26356,7 @@ define('build', function (require) {
      * name=value splitting has already happened.
      */
     function stringDotToObj(result, name, value) {
-        var parts = name.split('.'),
-            prop = parts[0];
+        var parts = name.split('.');
 
         parts.forEach(function (prop, i) {
             if (i === parts.length - 1) {
@@ -22383,8 +26379,10 @@ define('build', function (require) {
         has: true,
         hasOnSave: true,
         uglify: true,
+        uglify2: true,
         closure: true,
-        map: true
+        map: true,
+        throwWhen: true
     };
 
     build.hasDotPropMatch = function (prop) {
@@ -22412,7 +26410,9 @@ define('build', function (require) {
                 "include": true,
                 "exclude": true,
                 "excludeShallow": true,
-                "insertRequire": true
+                "insertRequire": true,
+                "stubModules": true,
+                "deps": true
             };
 
         for (i = 0; i < ary.length; i++) {
@@ -22445,6 +26445,10 @@ define('build', function (require) {
     };
 
     build.makeAbsPath = function (path, absFilePath) {
+        if (!absFilePath) {
+            return path;
+        }
+
         //Add abspath if necessary. If path starts with a slash or has a colon,
         //then already is an abolute path.
         if (path.indexOf('/') !== 0 && path.indexOf(':') === -1) {
@@ -22506,6 +26510,50 @@ define('build', function (require) {
         build.makeAbsObject(["startFile", "endFile"], config.wrap, absFilePath);
     };
 
+    /**
+     * Creates a relative path to targetPath from refPath.
+     * Only deals with file paths, not folders. If folders,
+     * make sure paths end in a trailing '/'.
+     */
+    build.makeRelativeFilePath = function (refPath, targetPath) {
+        var i, dotLength, finalParts, length, targetParts, targetName,
+            refParts = refPath.split('/'),
+            hasEndSlash = endsWithSlashRegExp.test(targetPath),
+            dotParts = [];
+
+        targetPath = file.normalize(targetPath);
+        if (hasEndSlash && !endsWithSlashRegExp.test(targetPath)) {
+            targetPath += '/';
+        }
+        targetParts = targetPath.split('/');
+        //Pull off file name
+        targetName = targetParts.pop();
+
+        //Also pop off the ref file name to make the matches against
+        //targetParts equivalent.
+        refParts.pop();
+
+        length = refParts.length;
+
+        for (i = 0; i < length; i += 1) {
+            if (refParts[i] !== targetParts[i]) {
+                break;
+            }
+        }
+
+        //Now i is the index in which they diverge.
+        finalParts = targetParts.slice(i);
+
+        dotLength = length - i;
+        for (i = 0; i > -1 && i < dotLength; i += 1) {
+            dotParts.push('..');
+        }
+
+        return dotParts.join('/') + (dotParts.length ? '/' : '') +
+               finalParts.join('/') + (finalParts.length ? '/' : '') +
+               targetName;
+    };
+
     build.nestedMix = {
         paths: true,
         has: true,
@@ -22518,22 +26566,40 @@ define('build', function (require) {
      * Mixes additional source config into target config, and merges some
      * nested config, like paths, correctly.
      */
-    function mixConfig(target, source) {
-        var prop, value;
+    function mixConfig(target, source, skipArrays) {
+        var prop, value, isArray, targetValue;
 
         for (prop in source) {
             if (hasProp(source, prop)) {
                 //If the value of the property is a plain object, then
                 //allow a one-level-deep mixing of it.
                 value = source[prop];
+                isArray = lang.isArray(value);
                 if (typeof value === 'object' && value &&
-                        !lang.isArray(value) && !lang.isFunction(value) &&
+                        !isArray && !lang.isFunction(value) &&
                         !lang.isRegExp(value)) {
                     target[prop] = lang.mixin({}, target[prop], value, true);
+                } else if (isArray) {
+                    if (!skipArrays) {
+                        // Some config, like packages, are arrays. For those,
+                        // just merge the results.
+                        targetValue = target[prop];
+                        if (lang.isArray(targetValue)) {
+                            target[prop] = targetValue.concat(value);
+                        } else {
+                            target[prop] = value;
+                        }
+                    }
                 } else {
                     target[prop] = value;
                 }
             }
+        }
+
+        //Set up log level since it can affect if errors are thrown
+        //or caught and passed to errbacks while doing config setup.
+        if (lang.hasProp(target, 'logLevel')) {
+            logger.logLevel(target.logLevel);
         }
     }
 
@@ -22553,8 +26619,31 @@ define('build', function (require) {
                 wrap[keyName] += (wrap[keyName] ? '\n' : '') +
                     file.readFile(build.makeAbsPath(fileName, absFilePath));
             });
+        } else if (wrap[keyName] === null ||  wrap[keyName] === undefined) {
+            //Allow missing one, just set to empty string.
+            wrap[keyName] = '';
         } else if (typeof wrap[keyName] !== 'string') {
             throw new Error('wrap.' + keyName + ' or wrap.' + keyFileName + ' malformed');
+        }
+    }
+
+    function normalizeWrapConfig(config, absFilePath) {
+        //Get any wrap text.
+        try {
+            if (config.wrap) {
+                if (config.wrap === true) {
+                    //Use default values.
+                    config.wrap = {
+                        start: '(function () {',
+                        end: '}());'
+                    };
+                } else {
+                    flattenWrapFile(config.wrap, 'start', absFilePath);
+                    flattenWrapFile(config.wrap, 'end', absFilePath);
+                }
+            }
+        } catch (wrapError) {
+            throw new Error('Malformed wrap config: ' + wrapError.toString());
         }
     }
 
@@ -22571,8 +26660,10 @@ define('build', function (require) {
      */
     build.createConfig = function (cfg) {
         /*jslint evil: true */
-        var config = {}, buildFileContents, buildFileConfig, mainConfig,
-            mainConfigFile, mainConfigPath, prop, buildFile, absFilePath;
+        var buildFileContents, buildFileConfig, mainConfig,
+            mainConfigFile, mainConfigPath, buildFile, absFilePath,
+            config = {},
+            buildBaseConfig = makeBuildBaseConfig();
 
         //Make sure all paths are relative to current directory.
         absFilePath = file.absPath('.');
@@ -22581,6 +26672,12 @@ define('build', function (require) {
 
         lang.mixin(config, buildBaseConfig);
         lang.mixin(config, cfg, true);
+
+        //Set up log level early since it can affect if errors are thrown
+        //or caught and passed to errbacks, even while constructing config.
+        if (lang.hasProp(config, 'logLevel')) {
+            logger.logLevel(config.logLevel);
+        }
 
         if (config.buildFile) {
             //A build file exists, load it to get more config.
@@ -22613,49 +26710,58 @@ define('build', function (require) {
 
         mainConfigFile = config.mainConfigFile || (buildFileConfig && buildFileConfig.mainConfigFile);
         if (mainConfigFile) {
-            mainConfigFile = build.makeAbsPath(mainConfigFile, absFilePath);
-            if (!file.exists(mainConfigFile)) {
-                throw new Error(mainConfigFile + ' does not exist.');
+            if (typeof mainConfigFile === 'string') {
+                mainConfigFile = [mainConfigFile];
             }
-            try {
-                mainConfig = parse.findConfig(mainConfigFile, file.readFile(mainConfigFile));
-            } catch (configError) {
-                throw new Error('The config in mainConfigFile ' +
-                        mainConfigFile +
-                        ' cannot be used because it cannot be evaluated' +
-                        ' correctly while running in the optimizer. Try only' +
-                        ' using a config that is also valid JSON, or do not use' +
-                        ' mainConfigFile and instead copy the config values needed' +
-                        ' into a build file or command line arguments given to the optimizer.');
-            }
-            if (mainConfig) {
-                mainConfigPath = mainConfigFile.substring(0, mainConfigFile.lastIndexOf('/'));
 
-                //Add in some existing config, like appDir, since they can be
-                //used inside the mainConfigFile -- paths and baseUrl are
-                //relative to them.
-                if (config.appDir && !mainConfig.appDir) {
-                    mainConfig.appDir = config.appDir;
+            mainConfigFile.forEach(function (configFile) {
+                configFile = build.makeAbsPath(configFile, absFilePath);
+                if (!file.exists(configFile)) {
+                    throw new Error(configFile + ' does not exist.');
                 }
-
-                //If no baseUrl, then use the directory holding the main config.
-                if (!mainConfig.baseUrl) {
-                    mainConfig.baseUrl = mainConfigPath;
+                try {
+                    mainConfig = parse.findConfig(file.readFile(configFile)).config;
+                } catch (configError) {
+                    throw new Error('The config in mainConfigFile ' +
+                            configFile +
+                            ' cannot be used because it cannot be evaluated' +
+                            ' correctly while running in the optimizer. Try only' +
+                            ' using a config that is also valid JSON, or do not use' +
+                            ' mainConfigFile and instead copy the config values needed' +
+                            ' into a build file or command line arguments given to the optimizer.\n' +
+                            'Source error from parsing: ' + configFile + ': ' + configError);
                 }
+                if (mainConfig) {
+                    mainConfigPath = configFile.substring(0, configFile.lastIndexOf('/'));
 
-                build.makeAbsConfig(mainConfig, mainConfigPath);
-                mixConfig(config, mainConfig);
-            }
+                    //Add in some existing config, like appDir, since they can be
+                    //used inside the configFile -- paths and baseUrl are
+                    //relative to them.
+                    if (config.appDir && !mainConfig.appDir) {
+                        mainConfig.appDir = config.appDir;
+                    }
+
+                    //If no baseUrl, then use the directory holding the main config.
+                    if (!mainConfig.baseUrl) {
+                        mainConfig.baseUrl = mainConfigPath;
+                    }
+
+                    build.makeAbsConfig(mainConfig, mainConfigPath);
+                    mixConfig(config, mainConfig);
+                }
+            });
         }
 
         //Mix in build file config, but only after mainConfig has been mixed in.
+        //Since this is a re-application, skip array merging.
         if (buildFileConfig) {
-            mixConfig(config, buildFileConfig);
+            mixConfig(config, buildFileConfig, true);
         }
 
         //Re-apply the override config values. Command line
         //args should take precedence over build file values.
-        mixConfig(config, cfg);
+        //Since this is a re-application, skip array merging.
+        mixConfig(config, cfg, true);
 
         //Fix paths to full paths so that they can be adjusted consistently
         //lately to be in the output area.
@@ -22671,6 +26777,9 @@ define('build', function (require) {
         //Set final output dir
         if (hasProp(config, "baseUrl")) {
             if (config.appDir) {
+                if (!config.originalBaseUrl) {
+                    throw new Error('Please set a baseUrl in the build config');
+                }
                 config.dirBaseUrl = build.makeAbsPath(config.originalBaseUrl, config.dir);
             } else {
                 config.dirBaseUrl = config.dir || config.baseUrl;
@@ -22685,7 +26794,8 @@ define('build', function (require) {
             throw new Error('"main" passed as an option, but the ' +
                             'supported option is called "name".');
         }
-        if (!config.name && !config.modules && !config.include && !config.cssIn) {
+        if (config.out && !config.name && !config.modules && !config.include &&
+                !config.cssIn) {
             throw new Error('Missing either a "name", "include" or "modules" ' +
                             'option');
         }
@@ -22711,7 +26821,8 @@ define('build', function (require) {
         if (config.appDir && config.out) {
             throw new Error('"appDir" is not compatible with "out". Use "dir" ' +
                             'instead. appDir is used to copy whole projects, ' +
-                            'where "out" is used to just optimize to one file.');
+                            'where "out" with "baseUrl" is used to just ' +
+                            'optimize to one file.');
         }
         if (config.out && config.dir) {
             throw new Error('The "out" and "dir" options are incompatible.' +
@@ -22720,13 +26831,34 @@ define('build', function (require) {
                             ' or baseUrl directories optimized.');
         }
 
+        if (config.dir) {
+            // Make sure the output dir is not set to a parent of the
+            // source dir or the same dir, as it will result in source
+            // code deletion.
+            if (!config.allowSourceOverwrites && (config.dir === config.baseUrl ||
+                config.dir === config.appDir ||
+                (config.baseUrl && build.makeRelativeFilePath(config.dir,
+                                           config.baseUrl).indexOf('..') !== 0) ||
+                (config.appDir &&
+                    build.makeRelativeFilePath(config.dir, config.appDir).indexOf('..') !== 0))) {
+                throw new Error('"dir" is set to a parent or same directory as' +
+                                ' "appDir" or "baseUrl". This can result in' +
+                                ' the deletion of source code. Stopping. If' +
+                                ' you want to allow possible overwriting of' +
+                                ' source code, set "allowSourceOverwrites"' +
+                                ' to true in the build config, but do so at' +
+                                ' your own risk. In that case, you may want' +
+                                ' to also set "keepBuildDir" to true.');
+            }
+        }
+
         if (config.insertRequire && !lang.isArray(config.insertRequire)) {
             throw new Error('insertRequire should be a list of module IDs' +
                             ' to insert in to a require([]) call.');
         }
 
         if (config.generateSourceMaps) {
-            if (config.preserveLicenseComments) {
+            if (config.preserveLicenseComments && config.optimize !== 'none') {
                 throw new Error('Cannot use preserveLicenseComments and ' +
                     'generateSourceMaps together. Either explcitly set ' +
                     'preserveLicenseComments to false (default is true) or ' +
@@ -22786,6 +26918,14 @@ define('build', function (require) {
             }
         }
 
+        //Normalize cssPrefix
+        if (config.cssPrefix) {
+            //Make sure cssPrefix ends in a slash
+            config.cssPrefix = endsWithSlash(config.cssPrefix);
+        } else {
+            config.cssPrefix = '';
+        }
+
         //Cycle through modules and combine any local stubModules with
         //global values.
         if (config.modules && config.modules.length) {
@@ -22802,27 +26942,15 @@ define('build', function (require) {
                         mod.stubModules._byName[id] = true;
                     });
                 }
+
+                //Allow wrap config in overrides, but normalize it.
+                if (mod.override) {
+                    normalizeWrapConfig(mod.override, absFilePath);
+                }
             });
         }
 
-        //Get any wrap text.
-        try {
-            if (config.wrap) {
-                if (config.wrap === true) {
-                    //Use default values.
-                    config.wrap = {
-                        start: '(function () {',
-                        end: '}());'
-                    };
-                } else {
-                    flattenWrapFile(config.wrap, 'start', absFilePath);
-                    flattenWrapFile(config.wrap, 'end', absFilePath);
-                }
-            }
-        } catch (wrapError) {
-            throw new Error('Malformed wrap config: need both start/end or ' +
-                            'startFile/endFile: ' + wrapError.toString());
-        }
+        normalizeWrapConfig(config, absFilePath);
 
         //Do final input verification
         if (config.context) {
@@ -22900,21 +27028,20 @@ define('build', function (require) {
      * given module.
      *
      * @param {Object} module the module object from the build config info.
-     * @param {Object} the build config object.
+     * @param {Object} config the build config object.
+     * @param {Object} [baseLoaderConfig] the base loader config to use for env resets.
      *
      * @returns {Object} layer information about what paths and modules should
      * be in the flattened module.
      */
-    build.traceDependencies = function (module, config) {
-        var include, override, layer, context, baseConfig, oldContext,
-            registry, id, idParts, pluginId, mod, errUrl,
-            errMessage = '',
-            failedPluginMap = {},
-            failedPluginIds = [],
-            errIds = [],
-            errUrlMap = {},
-            errUrlConflicts = {},
-            hasErrUrl = false,
+    build.traceDependencies = function (module, config, baseLoaderConfig) {
+        var include, override, layer, context, oldContext,
+            rawTextByIds,
+            syncChecks = {
+                rhino: true,
+                node: true,
+                xpconnect: true
+            },
             deferred = prim();
 
         //Reset some state set up in requirePatch.js, and clean up require's
@@ -22923,17 +27050,16 @@ define('build', function (require) {
 
         //Grab the reset layer and context after the reset, but keep the
         //old config to reuse in the new context.
-        baseConfig = oldContext.config;
         layer = require._layer;
         context = layer.context;
 
         //Put back basic config, use a fresh object for it.
-        //WARNING: probably not robust for paths and packages/packagePaths,
-        //since those property's objects can be modified. But for basic
-        //config clone it works out.
-        require(lang.mixin({}, baseConfig, true));
+        if (baseLoaderConfig) {
+            require(lang.deeplikeCopy(baseLoaderConfig));
+        }
 
-        logger.trace("\nTracing dependencies for: " + (module.name || module.out));
+        logger.trace("\nTracing dependencies for: " + (module.name ||
+                     (typeof module.out === 'function' ? 'FUNCTION' : module.out)));
         include = module.name && !module.create ? [module.name] : [];
         if (module.include) {
             include = include.concat(module.include);
@@ -22941,93 +27067,182 @@ define('build', function (require) {
 
         //If there are overrides to basic config, set that up now.;
         if (module.override) {
-            override = lang.mixin({}, baseConfig, true);
-            lang.mixin(override, module.override, true);
+            if (baseLoaderConfig) {
+                override = build.createOverrideConfig(baseLoaderConfig, module.override);
+            } else {
+                override = lang.deeplikeCopy(module.override);
+            }
             require(override);
         }
 
-        //Figure out module layer dependencies by calling require to do the work.
+        //Now, populate the rawText cache with any values explicitly passed in
+        //via config.
+        rawTextByIds = require.s.contexts._.config.rawText;
+        if (rawTextByIds) {
+            lang.eachProp(rawTextByIds, function (contents, id) {
+                var url = require.toUrl(id) + '.js';
+                require._cachedRawText[url] = contents;
+            });
+        }
+
+
         //Configure the callbacks to be called.
-        deferred.resolve.__requireJsBuild = true;
         deferred.reject.__requireJsBuild = true;
-        require(include, deferred.resolve, deferred.reject);
+
+        //Use a wrapping function so can check for errors.
+        function includeFinished(value) {
+            //If a sync build environment, check for errors here, instead of
+            //in the then callback below, since some errors, like two IDs pointed
+            //to same URL but only one anon ID will leave the loader in an
+            //unresolved state since a setTimeout cannot be used to check for
+            //timeout.
+            var hasError = false;
+            if (syncChecks[env.get()]) {
+                try {
+                    build.checkForErrors(context);
+                } catch (e) {
+                    hasError = true;
+                    deferred.reject(e);
+                }
+            }
+
+            if (!hasError) {
+                deferred.resolve(value);
+            }
+        }
+        includeFinished.__requireJsBuild = true;
+
+        //Figure out module layer dependencies by calling require to do the work.
+        require(include, includeFinished, deferred.reject);
+
+        // If a sync env, then with the "two IDs to same anon module path"
+        // issue, the require never completes, need to check for errors
+        // here.
+        if (syncChecks[env.get()]) {
+            build.checkForErrors(context);
+        }
 
         return deferred.promise.then(function () {
-            var id, prop;
-
             //Reset config
-            if (module.override) {
-                require(baseConfig);
+            if (module.override && baseLoaderConfig) {
+                require(lang.deeplikeCopy(baseLoaderConfig));
             }
 
-            //Check to see if it all loaded. If not, then stop, and give
-            //a message on what is left.
-            registry = context.registry;
-            for (id in registry) {
-                if (hasProp(registry, id) && id.indexOf('_@r') !== 0) {
-                    mod = getOwn(registry, id);
-                    if (id.indexOf('_unnormalized') === -1 && mod && mod.enabled) {
-                        errIds.push(id);
-                        errUrl = mod.map.url;
-
-                        if (errUrlMap[errUrl]) {
-                            hasErrUrl = true;
-                            //This error module has the same URL as another
-                            //error module, could be misconfiguration.
-                            if (!errUrlConflicts[errUrl]) {
-                                errUrlConflicts[errUrl] = [];
-                                //Store the original module that had the same URL.
-                                errUrlConflicts[errUrl].push(errUrlMap[errUrl]);
-                            }
-                            errUrlConflicts[errUrl].push(id);
-                        } else {
-                            errUrlMap[errUrl] = id;
-                        }
-                    }
-
-                    //Look for plugins that did not call load()
-                    idParts = id.split('!');
-                    pluginId = idParts[0];
-                    if (idParts.length > 1 && falseProp(failedPluginMap, pluginId)) {
-                        failedPluginIds.push(pluginId);
-                        failedPluginMap[pluginId] = true;
-                    }
-                }
-            }
-
-            if (errIds.length || failedPluginIds.length) {
-                if (failedPluginIds.length) {
-                    errMessage += 'Loader plugin' +
-                        (failedPluginIds.length === 1 ? '' : 's') +
-                        ' did not call ' +
-                        'the load callback in the build: ' +
-                        failedPluginIds.join(', ') + '\n';
-                }
-                errMessage += 'Module loading did not complete for: ' + errIds.join(', ');
-
-                if (hasErrUrl) {
-                    errMessage += '\nThe following modules share the same URL. This ' +
-                                  'could be a misconfiguration if that URL only has ' +
-                                  'one anonymous module in it:';
-                    for (prop in errUrlConflicts) {
-                        if (hasProp(errUrlConflicts, prop)) {
-                            errMessage += '\n' + prop + ': ' +
-                                          errUrlConflicts[prop].join(', ');
-                        }
-                    }
-                }
-                throw new Error(errMessage);
-            }
+            build.checkForErrors(context);
 
             return layer;
         });
     };
 
-    build.createOverrideConfig = function (config, override) {
-        var cfg = {};
+    build.checkForErrors = function (context) {
+        //Check to see if it all loaded. If not, then throw, and give
+        //a message on what is left.
+        var id, prop, mod, idParts, pluginId, pluginResources,
+            errMessage = '',
+            failedPluginMap = {},
+            failedPluginIds = [],
+            errIds = [],
+            errUrlMap = {},
+            errUrlConflicts = {},
+            hasErrUrl = false,
+            hasUndefined = false,
+            defined = context.defined,
+            registry = context.registry;
 
-        lang.mixin(cfg, config, true);
-        lang.eachProp(override, function (value, prop) {
+        function populateErrUrlMap(id, errUrl, skipNew) {
+            // Loader plugins do not have an errUrl, so skip them.
+            if (!errUrl) {
+                return;
+            }
+
+            if (!skipNew) {
+                errIds.push(id);
+            }
+
+            if (errUrlMap[errUrl]) {
+                hasErrUrl = true;
+                //This error module has the same URL as another
+                //error module, could be misconfiguration.
+                if (!errUrlConflicts[errUrl]) {
+                    errUrlConflicts[errUrl] = [];
+                    //Store the original module that had the same URL.
+                    errUrlConflicts[errUrl].push(errUrlMap[errUrl]);
+                }
+                errUrlConflicts[errUrl].push(id);
+            } else if (!skipNew) {
+                errUrlMap[errUrl] = id;
+            }
+        }
+
+        for (id in registry) {
+            if (hasProp(registry, id) && id.indexOf('_@r') !== 0) {
+                hasUndefined = true;
+                mod = getOwn(registry, id);
+                idParts = id.split('!');
+                pluginId = idParts[0];
+
+                if (id.indexOf('_unnormalized') === -1 && mod && mod.enabled) {
+                    populateErrUrlMap(id, mod.map.url);
+                }
+
+                //Look for plugins that did not call load()
+
+                if (idParts.length > 1) {
+                    if (falseProp(failedPluginMap, pluginId)) {
+                        failedPluginIds.push(pluginId);
+                    }
+                    pluginResources = failedPluginMap[pluginId];
+                    if (!pluginResources) {
+                        pluginResources = failedPluginMap[pluginId] = [];
+                    }
+                    pluginResources.push(id + (mod.error ? ': ' + mod.error : ''));
+                }
+            }
+        }
+
+        // If have some modules that are not defined/stuck in the registry,
+        // then check defined modules for URL overlap.
+        if (hasUndefined) {
+            for (id in defined) {
+                if (hasProp(defined, id) && id.indexOf('!') === -1) {
+                    populateErrUrlMap(id, require.toUrl(id) + '.js', true);
+                }
+            }
+        }
+
+        if (errIds.length || failedPluginIds.length) {
+            if (failedPluginIds.length) {
+                errMessage += 'Loader plugin' +
+                    (failedPluginIds.length === 1 ? '' : 's') +
+                    ' did not call ' +
+                    'the load callback in the build:\n' +
+                    failedPluginIds.map(function (pluginId) {
+                        var pluginResources = failedPluginMap[pluginId];
+                        return pluginId + ':\n  ' + pluginResources.join('\n  ');
+                    }).join('\n') + '\n';
+            }
+            errMessage += 'Module loading did not complete for: ' + errIds.join(', ');
+
+            if (hasErrUrl) {
+                errMessage += '\nThe following modules share the same URL. This ' +
+                              'could be a misconfiguration if that URL only has ' +
+                              'one anonymous module in it:';
+                for (prop in errUrlConflicts) {
+                    if (hasProp(errUrlConflicts, prop)) {
+                        errMessage += '\n' + prop + ': ' +
+                                      errUrlConflicts[prop].join(', ');
+                    }
+                }
+            }
+            throw new Error(errMessage);
+        }
+    };
+
+    build.createOverrideConfig = function (config, override) {
+        var cfg = lang.deeplikeCopy(config),
+            oride = lang.deeplikeCopy(override);
+
+        lang.eachProp(oride, function (value, prop) {
             if (hasProp(build.objProps, prop)) {
                 //An object property, merge keys. Start a new object
                 //so that source object in config does not get modified.
@@ -23038,6 +27253,7 @@ define('build', function (require) {
                 cfg[prop] = override[prop];
             }
         });
+
         return cfg;
     };
 
@@ -23056,15 +27272,15 @@ define('build', function (require) {
      * included in the flattened module text.
      */
     build.flattenModule = function (module, layer, config) {
-        var fileContents,
+        var fileContents, sourceMapGenerator,
+            sourceMapBase,
             buildFileContents = '';
 
         return prim().start(function () {
-            var path, reqIndex, currContents,
-                i, moduleName, shim, packageConfig,
-                parts, builder, writeApi, tempPragmas,
+            var reqIndex, currContents, fileForSourceMap,
+                moduleName, shim, packageMain, packageName,
+                parts, builder, writeApi,
                 namespace, namespaceWithDot, stubModulesByName,
-                newConfig = {},
                 context = layer.context,
                 onLayerEnds = [],
                 onLayerEndAdded = {};
@@ -23080,8 +27296,14 @@ define('build', function (require) {
             stubModulesByName = (module.stubModules && module.stubModules._byName) || {};
 
             //Start build output for the module.
+            module.onCompleteData = {
+                name: module.name,
+                path: (config.dir ? module._buildPath.replace(config.dir, "") : module._buildPath),
+                included: []
+            };
+
             buildFileContents += "\n" +
-                                 (config.dir ? module._buildPath.replace(config.dir, "") : module._buildPath) +
+                                  module.onCompleteData.path +
                                  "\n----------------\n";
 
             //If there was an existing file with require in it, hoist to the top.
@@ -23093,17 +27315,33 @@ define('build', function (require) {
                 }
             }
 
+            if (config.generateSourceMaps) {
+                sourceMapBase = config.dir || config.baseUrl;
+                fileForSourceMap = module._buildPath === 'FUNCTION' ?
+                                   (module.name || module.include[0] || 'FUNCTION') + '.build.js' :
+                                   module._buildPath.replace(sourceMapBase, '');
+                sourceMapGenerator = new SourceMapGenerator.SourceMapGenerator({
+                    file: fileForSourceMap
+                });
+            }
+
             //Write the built module to disk, and build up the build output.
             fileContents = "";
             return prim.serial(layer.buildFilePaths.map(function (path) {
                 return function () {
+                    var lineCount,
+                        singleContents = '';
+
                     moduleName = layer.buildFileToModule[path];
+                    packageName = moduleName.split('/').shift();
+
                     //If the moduleName is for a package main, then update it to the
                     //real main value.
-                    packageConfig = layer.context.config.pkgs &&
-                                    getOwn(layer.context.config.pkgs, moduleName);
-                    if (packageConfig) {
-                        moduleName += '/' + packageConfig.main;
+                    packageMain = layer.context.config.pkgs &&
+                                    getOwn(layer.context.config.pkgs, packageName);
+                    if (packageMain !== moduleName) {
+                        // Not a match, clear packageMain
+                        packageMain = undefined;
                     }
 
                     return prim().start(function () {
@@ -23119,18 +27357,18 @@ define('build', function (require) {
 
                             if (builder.write) {
                                 writeApi = function (input) {
-                                    fileContents += "\n" + addSemiColon(input);
+                                    singleContents += "\n" + addSemiColon(input, config);
                                     if (config.onBuildWrite) {
-                                        fileContents = config.onBuildWrite(moduleName, path, fileContents);
+                                        singleContents = config.onBuildWrite(moduleName, path, singleContents);
                                     }
                                 };
                                 writeApi.asModule = function (moduleName, input) {
-                                    fileContents += "\n" +
+                                    singleContents += "\n" +
                                         addSemiColon(build.toTransport(namespace, moduleName, path, input, layer, {
                                             useSourceUrl: layer.context.config.useSourceUrl
-                                        }));
+                                        }), config);
                                     if (config.onBuildWrite) {
-                                        fileContents = config.onBuildWrite(moduleName, path, fileContents);
+                                        singleContents = config.onBuildWrite(moduleName, path, singleContents);
                                     }
                                 };
                                 builder.write(parts.prefix, parts.name, writeApi);
@@ -23153,14 +27391,21 @@ define('build', function (require) {
                                     return require._cacheReadAsync(path);
                                 }
                             }).then(function (text) {
+                                var hasPackageName;
+
                                 currContents = text;
 
-                                if (config.cjsTranslate) {
+                                if (config.cjsTranslate &&
+                                    (!config.shim || !lang.hasProp(config.shim, moduleName))) {
                                     currContents = commonJs.convert(path, currContents);
                                 }
 
                                 if (config.onBuildRead) {
                                     currContents = config.onBuildRead(moduleName, path, currContents);
+                                }
+
+                                if (packageMain) {
+                                    hasPackageName = (packageName === parse.getNamedDefine(currContents));
                                 }
 
                                 if (namespace) {
@@ -23171,10 +27416,10 @@ define('build', function (require) {
                                     useSourceUrl: config.useSourceUrl
                                 });
 
-                                if (packageConfig) {
-                                    currContents = addSemiColon(currContents) + '\n';
+                                if (packageMain && !hasPackageName) {
+                                    currContents = addSemiColon(currContents, config) + '\n';
                                     currContents += namespaceWithDot + "define('" +
-                                                    packageConfig.name + "', ['" + moduleName +
+                                                    packageName + "', ['" + moduleName +
                                                     "'], function (main) { return main; });\n";
                                 }
 
@@ -23184,27 +27429,101 @@ define('build', function (require) {
 
                                 //Semicolon is for files that are not well formed when
                                 //concatenated with other content.
-                                fileContents += "\n" + addSemiColon(currContents);
+                                singleContents += addSemiColon(currContents, config);
                             });
                         }
                     }).then(function () {
-                        buildFileContents += path.replace(config.dir, "") + "\n";
+                        var refPath, pluginId, resourcePath,
+                            sourceMapPath, sourceMapLineNumber,
+                            shortPath = path.replace(config.dir, "");
+
+                        module.onCompleteData.included.push(shortPath);
+                        buildFileContents += shortPath + "\n";
+
                         //Some files may not have declared a require module, and if so,
                         //put in a placeholder call so the require does not try to load them
                         //after the module is processed.
                         //If we have a name, but no defined module, then add in the placeholder.
                         if (moduleName && falseProp(layer.modulesWithNames, moduleName) && !config.skipModuleInsertion) {
-                            shim = config.shim && getOwn(config.shim, moduleName);
+                            shim = config.shim && (getOwn(config.shim, moduleName) || (packageMain && getOwn(config.shim, moduleName) || getOwn(config.shim, packageName)));
                             if (shim) {
-                                fileContents += '\n' + namespaceWithDot + 'define("' + moduleName + '", ' +
-                                                 (shim.deps && shim.deps.length ?
-                                                        build.makeJsArrayString(shim.deps) + ', ' : '') +
-                                                 (shim.exportsFn ? shim.exportsFn() : 'function(){}') +
-                                                 ');\n';
+                                if (config.wrapShim) {
+                                    singleContents = '(function(root) {' +
+                                                     '\n' + namespaceWithDot + 'define("' + moduleName + '", ' +
+                                                     (shim.deps && shim.deps.length ?
+                                                            build.makeJsArrayString(shim.deps) + ', ' : '[], ') +
+                                                    'function() {\n' +
+                                                    '      return (function() {\n' +
+                                                             singleContents +
+                                                             (shim.exportsFn ? shim.exportsFn() : '') +
+                                                    '      }).apply(root, arguments);\n' +
+                                                    '    });\n' +
+                                                    '}(this));\n';
+                                } else {
+                                    singleContents += '\n' + namespaceWithDot + 'define("' + moduleName + '", ' +
+                                                     (shim.deps && shim.deps.length ?
+                                                            build.makeJsArrayString(shim.deps) + ', ' : '') +
+                                                     (shim.exportsFn ? shim.exportsFn() : 'function(){}') +
+                                                     ');\n';
+                                }
                             } else {
-                                fileContents += '\n' + namespaceWithDot + 'define("' + moduleName + '", function(){});\n';
+                                singleContents += '\n' + namespaceWithDot + 'define("' + moduleName + '", function(){});\n';
                             }
                         }
+
+                        //Add line break at end of file, instead of at beginning,
+                        //so source map line numbers stay correct, but still allow
+                        //for some space separation between files in case ASI issues
+                        //for concatenation would cause an error otherwise.
+                        singleContents += '\n';
+
+                        //Add to the source map
+                        if (sourceMapGenerator) {
+                            refPath = config.out ? config.baseUrl : module._buildPath;
+                            parts = path.split('!');
+                            if (parts.length === 1) {
+                                //Not a plugin resource, fix the path
+                                sourceMapPath = build.makeRelativeFilePath(refPath, path);
+                            } else {
+                                //Plugin resource. If it looks like just a plugin
+                                //followed by a module ID, pull off the plugin
+                                //and put it at the end of the name, otherwise
+                                //just leave it alone.
+                                pluginId = parts.shift();
+                                resourcePath = parts.join('!');
+                                if (resourceIsModuleIdRegExp.test(resourcePath)) {
+                                    sourceMapPath = build.makeRelativeFilePath(refPath, require.toUrl(resourcePath)) +
+                                                    '!' + pluginId;
+                                } else {
+                                    sourceMapPath = path;
+                                }
+                            }
+
+                            sourceMapLineNumber = fileContents.split('\n').length - 1;
+                            lineCount = singleContents.split('\n').length;
+                            for (var i = 1; i <= lineCount; i += 1) {
+                                sourceMapGenerator.addMapping({
+                                    generated: {
+                                        line: sourceMapLineNumber + i,
+                                        column: 0
+                                    },
+                                    original: {
+                                        line: i,
+                                        column: 0
+                                    },
+                                    source: sourceMapPath
+                                });
+                            }
+
+                            //Store the content of the original in the source
+                            //map since other transforms later like minification
+                            //can mess up translating back to the original
+                            //source.
+                            sourceMapGenerator.setSourceContent(sourceMapPath, singleContents);
+                        }
+
+                        //Add the file to the final contents
+                        fileContents += singleContents;
                     });
                 };
             })).then(function () {
@@ -23217,12 +27536,20 @@ define('build', function (require) {
                             path = module._buildPath;
                         }
                         builder.onLayerEnd(function (input) {
-                            fileContents += "\n" + addSemiColon(input);
+                            fileContents += "\n" + addSemiColon(input, config);
                         }, {
                             name: module.name,
                             path: path
                         });
                     });
+                }
+
+                if (module.create) {
+                    //The ID is for a created layer. Write out
+                    //a module definition for it in case the
+                    //built file is used with enforceDefine
+                    //(#432)
+                    fileContents += '\n' + namespaceWithDot + 'define("' + module.name + '", function(){});\n';
                 }
 
                 //Add a require at the end to kick start module execution, if that
@@ -23237,7 +27564,10 @@ define('build', function (require) {
                 text: config.wrap ?
                         config.wrap.start + fileContents + config.wrap.end :
                         fileContents,
-                buildText: buildFileContents
+                buildText: buildFileContents,
+                sourceMap: sourceMapGenerator ?
+                              JSON.stringify(sourceMapGenerator.toJSON(), null, '  ') :
+                              undefined
             };
         });
     };
@@ -23288,7 +27618,8 @@ define('build', function (require) {
             dir = dir.split('/');
             dir.pop();
             dir = dir.join('/');
-            exec("require({baseUrl: '" + dir + "'});");
+            //Make sure dir is JS-escaped, since it will be part of a JS string.
+            exec("require({baseUrl: '" + dir.replace(/[\\"']/g, '\\$&') + "'});");
         }
     }
 
@@ -23303,7 +27634,7 @@ define('build', function (require) {
 
             //Create the function that will be called once build modules
             //have been loaded.
-            var runBuild = function (build, logger) {
+            var runBuild = function (build, logger, quit) {
                 //Make sure config has a log level, and if not,
                 //make it "silent" by default.
                 config.logLevel = config.hasOwnProperty('logLevel') ?
@@ -23326,15 +27657,28 @@ define('build', function (require) {
                         requirejs._cacheReset();
                     }
 
+                    // Ensure errors get propagated to the errback
+                    if (result instanceof Error) {
+                      throw result;
+                    }
+
                     return result;
                 }
+
+                errback = errback || function (err) {
+                    // Using console here since logger may have
+                    // turned off error logging. Since quit is
+                    // called want to be sure a message is printed.
+                    console.log(err);
+                    quit(1);
+                };
 
                 build(config).then(done, done).then(callback, errback);
             };
 
             requirejs({
                 context: 'build'
-            }, ['build', 'logger'], runBuild);
+            }, ['build', 'logger', 'env!env/quit'], runBuild);
         };
 
         requirejs.tools = {
@@ -23376,6 +27720,15 @@ define('build', function (require) {
         setBaseUrl(location.href);
         createRjsApi();
         return;
+    } else if ((env === 'rhino' || env === 'xpconnect') &&
+            //User sets up requirejsAsLib variable to indicate it is loaded
+            //via load() to be used as a library.
+            typeof requirejsAsLib !== 'undefined' && requirejsAsLib) {
+        //This script is loaded via rhino's load() method, expose the
+        //API and get out.
+        setBaseUrl(fileName);
+        createRjsApi();
+        return;
     }
 
     if (commandOption === 'o') {
@@ -23383,7 +27736,7 @@ define('build', function (require) {
         loadLib();
 
         /**
- * @license Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license Copyright (c) 2010-2014, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -23404,14 +27757,19 @@ require({
     catchError: {
         define: true
     }
-},       ['env!env/args', 'build'],
-function (args,            build) {
-    build(args);
+},       ['env!env/args', 'env!env/quit', 'logger', 'build'],
+function (args, quit, logger, build) {
+    build(args).then(function () {}, function (err) {
+        logger.error(err);
+        quit(1);
+    });
 });
 
 
     } else if (commandOption === 'v') {
-        console.log('r.js: ' + version + ', RequireJS: ' + this.requirejsVars.require.version);
+        console.log('r.js: ' + version +
+                    ', RequireJS: ' + this.requirejsVars.require.version +
+                    ', UglifyJS2: 2.4.12, UglifyJS: 1.3.4');
     } else if (commandOption === 'convert') {
         loadLib();
 
@@ -23447,5 +27805,7 @@ function (args,            build) {
     }
 
 }((typeof console !== 'undefined' ? console : undefined),
-    (typeof Packages !== 'undefined' ? Array.prototype.slice.call(arguments, 0) : []),
+    (typeof Packages !== 'undefined' || (typeof window === 'undefined' &&
+        typeof Components !== 'undefined' && Components.interfaces) ?
+        Array.prototype.slice.call(arguments, 0) : []),
     (typeof readFile !== 'undefined' ? readFile : undefined)));
